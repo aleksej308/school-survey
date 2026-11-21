@@ -598,15 +598,17 @@ const server = http.createServer(async (req, res) => {
     let url;
     try { url = new URL(req.url, 'http://localhost'); } catch { url = new URL('/', 'http://localhost'); }
     const pathname = url.pathname;
+    // HEAD обрабатываем как GET (тело ответа Node отбросит автоматически).
+    const method = req.method === 'HEAD' ? 'GET' : req.method;
 
     // Статический маршрут /s/:id — отдаём index.html
-    if (req.method === 'GET' && /^\/s\/\d+/.test(pathname)) {
+    if (method === 'GET' && /^\/s\/\d+/.test(pathname)) {
       serveStatic(req, res, '/index.html');
       return;
     }
 
     for (const r of routes) {
-      if (r.method !== req.method) continue;
+      if (r.method !== method) continue;
       const m = r.regex.exec(pathname);
       if (m) {
         const params = {};
@@ -616,7 +618,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    if (req.method === 'GET') {
+    if (method === 'GET') {
       serveStatic(req, res, pathname);
     } else {
       sendJson(res, 404, { error: 'Не найдено' });
