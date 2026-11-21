@@ -27,6 +27,18 @@ const ENFORCE_IP = process.env.ENFORCE_IP === '1';
 const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
 const ADMIN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+// Ограничение попыток входа администратора (защита от перебора пароля).
+const LOGIN_MAX_ATTEMPTS = 5;             // попыток
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;   // за 15 минут
+const loginAttempts = new Map();          // ip -> { count, resetAt }
+
+// Признак защищённого (HTTPS) соединения — нужен, чтобы ставить флаг Secure у cookie.
+function isSecureReq(req) {
+  if (req.socket && req.socket.encrypted) return true;
+  if (TRUST_PROXY && String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https') return true;
+  return false;
+}
+
 /* ---------- инициализация настроек ---------- */
 
 function initSettings() {
@@ -277,7 +289,7 @@ route('POST', '/api/survey/:id/submit', async (req, res, params) => {
     surveyId, firstName, lastName, classId, ip, body.answers
   );
 
-  setCookie(res, `taken_${surveyId}`, '1', { maxAge: 365 * 24 * 60 * 60, httpOnly: true });
+  setCookie(res, `taken_${surveyId}`, '1', { maxAge: 365 * 24 * 60 * 60, httpOnly: true, secure: isSecureReq(req) });
   sendJson(res, 200, { ok: true, response_id: responseId });
 });
 
@@ -308,16 +320,31 @@ function validateAnswers(survey, answers) {
 
 route('POST', '/api/admin/login', async (req, res) => {
   if (isCrossSite(req)) { sendJson(res, 403, { error: 'Запрос отклонён' }); return; }
+  const ip = auth.getClientIp(req, TRUST_PROXY);
+  const now = Date.now();
+  const entry = loginAttempts.get(ip);
+  if (entry && entry.resetAt > now && entry.count >= LOGIN_MAX_ATTEMPTS) {
+    const waitMin = Math.ceil((entry.resetAt - now) / 60000);
+    sendJson(res, 429, { error: `Слишком много попыток входа. Попробуйте через ${waitMin} мин.` });
+    return;
+  }
   let body;
   try { body = await readJson(req); } catch (e) { sendJson(res, 400, { error: e.message }); return; }
   const password = String(body.password || '');
   const hash = db.getSetting('admin_password_hash');
   if (!password || !auth.verifyPassword(password, hash)) {
+    if (!entry || entry.resetAt <= now) {
+      loginAttempts.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+    } else {
+      entry.count += 1;
+    }
+    await new Promise((r) => setTimeout(r, 500)); // замедляем перебор
     sendJson(res, 401, { error: 'Неверный пароль' });
     return;
   }
+  loginAttempts.delete(ip);
   const token = auth.createAdminToken(SESSION_SECRET, ADMIN_TTL_MS);
-  setCookie(res, 'admin_token', token, { maxAge: Math.floor(ADMIN_TTL_MS / 1000), httpOnly: true });
+  setCookie(res, 'admin_token', token, { maxAge: Math.floor(ADMIN_TTL_MS / 1000), httpOnly: true, secure: isSecureReq(req) });
   sendJson(res, 200, { ok: true });
 });
 
