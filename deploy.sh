@@ -8,8 +8,9 @@
 # Пример:
 #   sudo bash deploy.sh опросы.школа.рф admin@школа.рф
 #
-# Пароль администратора приложения задаётся через переменную ADMIN_PASSWORD,
-# иначе скрипт спросит его интерактивно (действует только при первом запуске).
+# Скрипт идемпотентен: безопасно запускать повторно при обновлениях.
+# HTTPS-конфиг nginx пишется самим скриптом (certbot НЕ модифицирует конфиг),
+# поэтому повторный запуск не ломает уже настроенный SSL.
 #
 set -euo pipefail
 
@@ -23,7 +24,7 @@ if [[ -z "$DOMAIN" ]]; then
   exit 1
 fi
 
-# ---------- пароль администратора ----------
+# ---------- пароль администратора (важен только при первом запуске) ----------
 if [[ -z "${ADMIN_PASSWORD:-}" ]]; then
   read -rsp "Пароль администратора приложения: " ADMIN_PASSWORD; echo
 fi
@@ -55,7 +56,6 @@ fi
 APP_PORT="${APP_PORT:-}"
 if [[ -z "$APP_PORT" ]]; then
   APP_PORT=3000
-  # Если 3000 занят — ищем свободный порт в диапазоне 8080–8099.
   if command -v ss >/dev/null && ss -ltn 2>/dev/null | grep -q ":3000 "; then
     for p in $(seq 8080 8099); do
       if ! ss -ltn 2>/dev/null | grep -q ":${p} "; then APP_PORT=$p; break; fi
@@ -67,16 +67,72 @@ echo "==> Хост-порт приложения: ${APP_PORT}"
 # ---------- приложение ----------
 echo "==> Сборка и запуск приложения"
 cd "$APP_DIR"
-# Передаём параметры через окружение (Compose прочитает их как ${ADMIN_PASSWORD} и т.д.).
 export ADMIN_PASSWORD TRUST_PROXY=1 BIND_HOST=127.0.0.1 APP_PORT
 "${COMPOSE[@]}" up -d --build
 
-# ---------- nginx: обратный прокси ----------
-echo "==> Настройка nginx (HTTP-этап)"
+# ---------- HTTPS-сертификат (выпускаем один раз, если его ещё нет) ----------
+CERT_PATH="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
+if [[ ! -f "$CERT_PATH" ]]; then
+  echo "==> Получение HTTPS-сертификата"
+  if ! command -v certbot >/dev/null; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -y
+    apt-get install -y certbot python3-certbot-nginx
+  fi
+
+  # Временный HTTP-конфиг, чтобы certbot прошёл проверку домена.
+  cat > /etc/nginx/sites-available/school-survey <<EOF
+server {
+    listen 80;
+    server_name ${DOMAIN};
+    location / {
+        proxy_pass http://127.0.0.1:${APP_PORT};
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        client_max_body_size 5m;
+    }
+}
+EOF
+  ln -sf /etc/nginx/sites-available/school-survey /etc/nginx/sites-enabled/school-survey
+  nginx -t && systemctl reload nginx
+
+  CERT_ARGS=(certonly --nginx -d "$DOMAIN" --non-interactive --agree-tos)
+  if [[ -n "$EMAIL" ]]; then
+    CERT_ARGS+=(-m "$EMAIL")
+  else
+    CERT_ARGS+=(--register-unsafely-without-email)
+  fi
+  certbot "${CERT_ARGS[@]}"
+
+  # После обновления сертификата перезагружаем nginx автоматически.
+  mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+  cat > /etc/letsencrypt/renewal-hooks/deploy/nginx-reload <<'HOOK'
+#!/bin/sh
+systemctl reload nginx 2>/dev/null || service nginx reload 2>/dev/null || true
+HOOK
+  chmod +x /etc/letsencrypt/renewal-hooks/deploy/nginx-reload
+else
+  echo "==> Сертификат для ${DOMAIN} уже существует"
+fi
+
+# ---------- финальный nginx-конфиг (HTTP→HTTPS + SSL), пишется всегда ----------
+echo "==> Настройка nginx (HTTPS)"
 cat > /etc/nginx/sites-available/school-survey <<EOF
 server {
     listen 80;
     server_name ${DOMAIN};
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name ${DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
 
     location / {
         proxy_pass http://127.0.0.1:${APP_PORT};
@@ -91,27 +147,6 @@ EOF
 ln -sf /etc/nginx/sites-available/school-survey /etc/nginx/sites-enabled/school-survey
 # Чужие конфиги не трогаем — только проверяем и перезагружаем nginx.
 nginx -t && systemctl reload nginx
-
-# ---------- HTTPS (Let's Encrypt) ----------
-echo "==> Получение HTTPS-сертификата"
-if ! command -v certbot >/dev/null; then
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update -y
-  apt-get install -y certbot python3-certbot-nginx
-fi
-
-CERT_ARGS=(--nginx -d "$DOMAIN" --non-interactive --agree-tos --redirect)
-if [[ -n "$EMAIL" ]]; then
-  CERT_ARGS+=(-m "$EMAIL")
-else
-  CERT_ARGS+=(--register-unsafely-without-email)
-fi
-
-if certbot certificates 2>/dev/null | grep -q "Certificate Name: ${DOMAIN}"; then
-  echo "Сертификат для ${DOMAIN} уже существует — пропускаем выдачу."
-else
-  certbot "${CERT_ARGS[@]}"
-fi
 
 # ---------- firewall (если включён ufw) ----------
 if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
