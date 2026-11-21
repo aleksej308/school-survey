@@ -51,11 +51,24 @@ if ! command -v nginx >/dev/null; then
   apt-get install -y nginx
 fi
 
+# ---------- выбор свободного хост-порта ----------
+APP_PORT="${APP_PORT:-}"
+if [[ -z "$APP_PORT" ]]; then
+  APP_PORT=3000
+  # Если 3000 занят — ищем свободный порт в диапазоне 8080–8099.
+  if command -v ss >/dev/null && ss -ltn 2>/dev/null | grep -q ":3000 "; then
+    for p in $(seq 8080 8099); do
+      if ! ss -ltn 2>/dev/null | grep -q ":${p} "; then APP_PORT=$p; break; fi
+    done
+  fi
+fi
+echo "==> Хост-порт приложения: ${APP_PORT}"
+
 # ---------- приложение ----------
 echo "==> Сборка и запуск приложения"
 cd "$APP_DIR"
 # Передаём параметры через окружение (Compose прочитает их как ${ADMIN_PASSWORD} и т.д.).
-export ADMIN_PASSWORD TRUST_PROXY=1 BIND_HOST=127.0.0.1
+export ADMIN_PASSWORD TRUST_PROXY=1 BIND_HOST=127.0.0.1 APP_PORT
 "${COMPOSE[@]}" up -d --build
 
 # ---------- nginx: обратный прокси ----------
@@ -66,7 +79,7 @@ server {
     server_name ${DOMAIN};
 
     location / {
-        proxy_pass http://127.0.0.1:3000;
+        proxy_pass http://127.0.0.1:${APP_PORT};
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -76,7 +89,7 @@ server {
 }
 EOF
 ln -sf /etc/nginx/sites-available/school-survey /etc/nginx/sites-enabled/school-survey
-rm -f /etc/nginx/sites-enabled/default
+# Чужие конфиги не трогаем — только проверяем и перезагружаем nginx.
 nginx -t && systemctl reload nginx
 
 # ---------- HTTPS (Let's Encrypt) ----------
