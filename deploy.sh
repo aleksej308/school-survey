@@ -53,13 +53,9 @@ fi
 
 # ---------- приложение ----------
 echo "==> Сборка и запуск приложения"
-# .env не попадает в git (см. .gitignore) — здесь только секрет пароля.
-cat > "$APP_DIR/.env" <<EOF
-ADMIN_PASSWORD=${ADMIN_PASSWORD}
-TRUST_PROXY=1
-BIND_HOST=127.0.0.1
-EOF
 cd "$APP_DIR"
+# Передаём параметры через окружение (Compose прочитает их как ${ADMIN_PASSWORD} и т.д.).
+export ADMIN_PASSWORD TRUST_PROXY=1 BIND_HOST=127.0.0.1
 "${COMPOSE[@]}" up -d --build
 
 # ---------- nginx: обратный прокси ----------
