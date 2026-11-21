@@ -100,84 +100,42 @@ docker run -d --name school-survey \
 > ученика весь класс не смог бы ответить. Включайте `ENFORCE_IP=1`, только если уверены,
 > что каждый участник имеет отдельный IP.
 
-## Развёртывание на VPS (интернет)
+## Развёртывание на сервере (Docker + nginx + HTTPS)
 
-Пример для Ubuntu + Node.js 22.
+Готовый сценарий [`deploy.sh`](deploy.sh) разворачивает всё одной командой на Ubuntu
+(Docker должен быть уже установлен): собирает контейнер, настраивает nginx как
+обратный прокси и получает HTTPS-сертификат Let's Encrypt.
 
-1. **Установите Node.js 22+** (например, через nvm или NodeSource):
-
-   ```bash
-   curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-   sudo apt-get install -y nodejs
-   ```
-
-2. **Загрузите проект** на сервер, например в `/opt/school-survey`:
+1. **Склонируйте репозиторий** (он приватный — нужен токен или GitHub CLI):
 
    ```bash
-   sudo mkdir -p /opt/school-survey
-   sudo rsync -a --exclude data/app.db . /opt/school-survey/
+   # вариант A: через GitHub CLI
+   gh auth login && gh repo clone aleksej308/school-survey
+
+   # вариант B: через персональный токен (classic «repo», либо fine-grained «Contents: read»)
+   git clone https://<ТОКЕН>@github.com/aleksej308/school-survey.git
+   cd school-survey
    ```
 
-3. **Создайте systemd-сервис** `/etc/systemd/system/school-survey.service`:
-
-   ```ini
-   [Unit]
-   Description=School Survey
-   After=network.target
-
-   [Service]
-   WorkingDirectory=/opt/school-survey
-   Environment=PORT=3000
-   Environment=TRUST_PROXY=1
-   Environment=ADMIN_PASSWORD=смените_на_свой
-   ExecStart=/usr/bin/node server.js
-   Restart=always
-   RestartSec=3
-   User=www-data
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
+2. **Запустите развёртывание** (от root; скрипт спросит пароль администратора):
 
    ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now school-survey
+   sudo bash deploy.sh опросы.ваша-школа.рф admin@ваша-школа.рф
    ```
 
-4. **Настройте nginx** (обратный прокси + HTTPS). Файл
-   `/etc/nginx/sites-available/school-survey`:
+   После завершения приложение доступно по адресу `https://опросы.ваша-школа.рф`.
+   Пароль администратора можно передать и сразу: `sudo ADMIN_PASSWORD='...' bash deploy.sh ...`.
 
-   ```nginx
-   server {
-       listen 80;
-       server_name опросы.ваша-школа.рф;
-
-       client_max_body_size 5m;
-
-       location / {
-           proxy_pass http://127.0.0.1:3000;
-           proxy_set_header Host $host;
-           proxy_set_header X-Real-IP $remote_addr;
-           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-           proxy_set_header X-Forwarded-Proto $scheme;
-       }
-   }
-   ```
+3. **Обновление** (при выходе новой версии):
 
    ```bash
-   sudo ln -s /etc/nginx/sites-available/school-survey /etc/nginx/sites-enabled/
-   sudo nginx -t && sudo systemctl reload nginx
+   git pull
+   sudo bash deploy.sh опросы.ваша-школа.рф admin@ваша-школа.рф
    ```
 
-5. **Настройте HTTPS** (рекомендуется):
-
-   ```bash
-   sudo apt-get install -y certbot python3-certbot-nginx
-   sudo certbot --nginx -d опросы.ваша-школа.рф
-   ```
-
-После этого приложение доступно по адресу в интернете. Смените пароль администратора
-через раздел «Настройки».
+Перед запуском убедитесь, что в файрволе/облаке открыты порты **80** и **443**
+(скрипт сам откроет их в `ufw`, если тот активен). Данные БД хранятся в volume
+`school-survey_survey-data` и сохраняются при пересоздании контейнера.
 
 ## Резервное копирование
 
@@ -196,6 +154,9 @@ lib/pdf.js             — генератор .pdf с кириллицей (вс
 public/                — фронтенд (SPA): index.html, css, js
 fonts/DejaVuSans.ttf   — шрифт для PDF (лицензия OFL)
 data/app.db            — база данных (создаётся при первом запуске)
+Dockerfile             — образ приложения
+docker-compose.yml     — сборка и запуск контейнера
+deploy.sh              — развёртывание на сервере (nginx + HTTPS)
 scripts/               — вспомогательные скрипты и тесты
 ```
 
