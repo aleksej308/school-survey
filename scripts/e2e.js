@@ -71,8 +71,8 @@ async function waitServer() {
     title: 'Тестовый опрос',
     description: 'Проверка работы',
     questions: [
-      { text: 'Любимый предмет?', type: 'single', required: true, options: [{ text: 'Математика' }, { text: 'Литература' }, { text: 'История' }] },
-      { text: 'Какие кружки посещаете?', type: 'multiple', required: true, options: [{ text: 'Спорт' }, { text: 'Музыка' }, { text: 'Рисование' }] },
+      { text: 'Любимый предмет?', type: 'single', required: true, options: ['Математика', 'Литература', 'История'] },
+      { text: 'Какие кружки посещаете?', type: 'multiple', required: true, options: ['Спорт', 'Музыка', 'Рисование'] },
       { text: 'Пожелания', type: 'text', required: false, options: [] }
     ]
   };
@@ -84,6 +84,21 @@ async function waitServer() {
   // 6. опрос не опубликован -> недоступен
   r = await req('GET', `/api/survey/${surveyId}`);
   check('черновик недоступен публично', r.status === 404);
+
+  // 6.5 сохранение без жёсткой проверки + проверка при публикации
+  const draft = {
+    title: 'Черновик с неполным вопросом',
+    description: '',
+    questions: [{ text: 'Неполный вопрос?', type: 'single', required: true, options: ['Только один вариант'] }]
+  };
+  r = await req('POST', '/api/admin/surveys', draft);
+  check('сохранить черновик с 1 вариантом -> 200', r.status === 200);
+  const draftId = r.data.survey.id;
+  check('черновик: вариант сохранён строкой', r.data.survey.questions[0].options.length === 1 && r.data.survey.questions[0].options[0].text === 'Только один вариант');
+  r = await req('POST', `/api/admin/surveys/${draftId}/publish`, { published: true });
+  check('опубликовать неполный -> 400', r.status === 400);
+  r = await req('POST', '/api/admin/surveys', { title: '', description: '', questions: [] });
+  check('сохранить без названия -> 200 (Без названия)', r.status === 200 && r.data.survey.title === 'Без названия');
 
   // 7. публикация
   r = await req('POST', `/api/admin/surveys/${surveyId}/publish`, { published: true });

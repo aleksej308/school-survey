@@ -11,12 +11,12 @@ function esc(s) {
     .replace(/'/g, '&#39;');
 }
 
-function toast(msg) {
+function toast(msg, ms = 2600) {
   const t = document.createElement('div');
   t.className = 'toast';
   t.textContent = msg;
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), 2600);
+  setTimeout(() => t.remove(), ms);
 }
 
 function formatDate(s) {
@@ -322,7 +322,7 @@ async function viewAdminSurveys(app) {
       try {
         await api('POST', `/api/admin/surveys/${b.dataset.toggle}/publish`, { published: b.dataset.pub === '1' });
         viewAdminSurveys(app);
-      } catch (e) { toast(e.message); }
+      } catch (e) { toast(e.message, 6000); }
     });
   });
 }
@@ -434,11 +434,10 @@ async function viewEditor(app, id) {
   document.getElementById('saveBtn').addEventListener('click', async () => {
     const errBox = document.getElementById('editorErr');
     try {
-      validateEditor();
       const payload = { title: ES.title, description: ES.description, questions: ES.questions };
       if (id) await api('PUT', `/api/admin/surveys/${id}`, payload);
       else await api('POST', '/api/admin/surveys', payload);
-      toast('Сохранено');
+      toast('Черновик сохранён');
       location.hash = '#/admin/surveys';
     } catch (e) {
       errBox.innerHTML = `<div class="error-banner">${esc(e.message)}</div>`;

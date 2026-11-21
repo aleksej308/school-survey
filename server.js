@@ -424,8 +424,7 @@ route('POST', '/api/admin/surveys', async (req, res) => {
   let body;
   try { body = await readJson(req); } catch (e) { sendJson(res, 400, { error: e.message }); return; }
   try {
-    validateSurveyInput(body);
-    sendJson(res, 200, { survey: db.createSurvey(body) });
+    sendJson(res, 200, { survey: db.createSurvey(prepareSurveyBody(body)) });
   } catch (e) {
     sendJson(res, 400, { error: e.message });
   }
@@ -444,8 +443,7 @@ route('PUT', '/api/admin/surveys/:id', async (req, res, params) => {
   let body;
   try { body = await readJson(req); } catch (e) { sendJson(res, 400, { error: e.message }); return; }
   try {
-    validateSurveyInput(body);
-    sendJson(res, 200, { survey: db.updateSurvey(Number(params.id), body) });
+    sendJson(res, 200, { survey: db.updateSurvey(Number(params.id), prepareSurveyBody(body)) });
   } catch (e) {
     sendJson(res, 400, { error: e.message });
   }
@@ -464,24 +462,42 @@ route('POST', '/api/admin/surveys/:id/publish', async (req, res, params) => {
   let body;
   try { body = await readJson(req); } catch (e) { sendJson(res, 400, { error: e.message }); return; }
   try {
-    sendJson(res, 200, { survey: db.setPublished(Number(params.id), !!body.published) });
+    const surveyId = Number(params.id);
+    if (body.published) {
+      const survey = db.getSurvey(surveyId);
+      if (!survey) throw new Error('Опрос не найден');
+      validateForPublish(survey);
+    }
+    sendJson(res, 200, { survey: db.setPublished(surveyId, !!body.published) });
   } catch (e) {
     sendJson(res, 400, { error: e.message });
   }
 });
 
-function validateSurveyInput(body) {
-  const title = String(body.title || '').trim();
-  if (!title) throw new Error('Укажите название опроса');
-  const questions = Array.isArray(body.questions) ? body.questions : [];
-  if (questions.length === 0) throw new Error('Добавьте хотя бы один вопрос');
-  for (const q of questions) {
+// Сохранение черновика — без жёсткой проверки: пустой заголовок заменяем,
+// а вопросы/варианты сохраняем как есть (пустые отбрасываются в db.insertQuestions).
+function prepareSurveyBody(body) {
+  return {
+    title: String(body.title || '').trim() || 'Без названия',
+    description: String(body.description || '').trim(),
+    questions: Array.isArray(body.questions) ? body.questions : []
+  };
+}
+
+// Публикация — строгая проверка: опрос должен быть полностью заполнен.
+function validateForPublish(survey) {
+  const filled = (survey.questions || []).filter((q) => String(q.text || '').trim());
+  if (filled.length === 0) {
+    throw new Error('Нельзя опубликовать: добавьте хотя бы один вопрос с текстом.');
+  }
+  for (const q of survey.questions) {
     const text = String(q.text || '').trim();
-    if (!text) throw new Error('Текст вопроса не может быть пустым');
-    if (!['single', 'multiple', 'text'].includes(q.type)) throw new Error('Неверный тип вопроса');
+    if (!text) throw new Error('Нельзя опубликовать: есть вопрос без текста.');
     if (q.type !== 'text') {
-      const opts = Array.isArray(q.options) ? q.options.filter((o) => String(o.text || '').trim()) : [];
-      if (opts.length < 2) throw new Error(`Добавьте минимум два варианта ответа в вопросе: ${text}`);
+      const opts = (q.options || []).map(db.optionText).filter(Boolean);
+      if (opts.length < 2) {
+        throw new Error(`Нельзя опубликовать: в вопросе «${text}» нужно минимум 2 варианта ответа.`);
+      }
     }
   }
 }
