@@ -628,17 +628,17 @@ async function viewSettings(app) {
 /* ================= router ================= */
 
 const routes = [
-  [/^#\/$/, viewHome],
+  [/^#\/$/, (m, app) => viewHome(app)],
   [/^#\/login\/(\d+)$/, (m, app) => viewLogin(app, m[1])],
   [/^#\/survey\/(\d+)$/, (m, app) => viewSurvey(app, m[1])],
-  [/^#\/done$/, viewDone],
+  [/^#\/done$/, (m, app) => viewDone(app)],
   [/^#\/admin$/, async (m, app) => { if (await ensureAdmin()) location.hash = '#/admin/surveys'; else renderAdminLogin(app); }],
-  [/^#\/admin\/surveys$/, viewAdminSurveys],
+  [/^#\/admin\/surveys$/, (m, app) => viewAdminSurveys(app)],
   [/^#\/admin\/survey\/new$/, (m, app) => viewEditor(app, null)],
   [/^#\/admin\/survey\/(\d+)$/, (m, app) => viewEditor(app, m[1])],
-  [/^#\/admin\/classes$/, viewClasses],
+  [/^#\/admin\/classes$/, (m, app) => viewClasses(app)],
   [/^#\/admin\/report\/(\d+)$/, (m, app) => viewReport(app, m[1])],
-  [/^#\/admin\/settings$/, viewSettings]
+  [/^#\/admin\/settings$/, (m, app) => viewSettings(app)]
 ];
 
 async function route() {
