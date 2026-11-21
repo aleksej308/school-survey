@@ -1,0 +1,5 @@
+* text=auto
+*.ttf binary
+*.db binary
+*.db-wal binary
+*.db-shm binary

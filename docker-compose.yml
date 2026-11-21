@@ -1,0 +1,22 @@
+services:
+  school-survey:
+    build: .
+    image: school-survey:latest
+    container_name: school-survey
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      # Пароль администратора задаётся ТОЛЬКО при первом запуске (когда БД ещё пуста).
+      # После первого входа смените его в разделе «Настройки» — переменная больше не влияет.
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      # 1 — если за обратным прокси (nginx), чтобы корректно определять IP участников
+      - TRUST_PROXY=${TRUST_PROXY:-0}
+      # Дополнительная блокировка повторов по IP (по умолчанию выключена из-за общего NAT в школах)
+      # - ENFORCE_IP=1
+    volumes:
+      - survey-data:/app/data
+
+volumes:
+  survey-data:

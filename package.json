@@ -1,0 +1,15 @@
+{
+  "name": "school-survey",
+  "version": "1.0.0",
+  "description": "Веб-приложение для проведения опросов среди учащихся школы",
+  "private": true,
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "license": "MIT"
+}

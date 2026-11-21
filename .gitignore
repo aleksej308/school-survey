@@ -1,0 +1,14 @@
+# зависимости
+node_modules/
+
+# база данных и временные файлы SQLite
+data/*
+!data/.gitkeep
+
+# логи и служебные файлы
+*.log
+*.db
+*.db-wal
+*.db-shm
+.DS_Store
+.env
