@@ -1,8 +1,10 @@
 services:
   school-survey:
     build: .
-    image: school-survey:latest
-    container_name: school-survey
+    # STACK — имя инстанса (deploy.sh экспортирует его). Несколько инстансов
+    # на одном сервере: у каждого свой контейнер, образ и volume с БД.
+    image: ${STACK:-school-survey}:latest
+    container_name: ${STACK:-school-survey}
     restart: unless-stopped
     ports:
       # BIND_HOST=127.0.0.1 — когда приложение работает за nginx (продакшен).
@@ -23,3 +25,5 @@ services:
 
 volumes:
   survey-data:
+    # С compose-проектом (-p STACK) volume получает имя <STACK>_survey-data —
+    # у каждого инстанса своя база.

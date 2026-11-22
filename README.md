@@ -159,6 +159,25 @@ docker run -d --name school-survey \
 (скрипт сам откроет их в `ufw`, если тот активен). Данные БД хранятся в volume
 `school-survey_survey-data` и сохраняются при пересоздании контейнера.
 
+### Несколько независимых инстансов на одном сервере
+
+Каждому инстансу — свой домен, своя база и свой контейнер. Имя инстанса задаётся
+переменной `STACK` (по умолчанию `school-survey`, поэтому существующая установка
+обновляется без изменений):
+
+```bash
+sudo STACK=vika-opros bash deploy.sh vika-opros.domen.ru admin@domen.ru
+```
+
+У такого инстанса: контейнер и образ `vika-opros`, volume с БД `vika-opros_survey-data`,
+отдельный nginx-конфиг `/etc/nginx/sites-available/vika-opros` и свой порт
+(запоминается в `/etc/school-survey-ports/vika-opros`, чтобы не менялся между запусками).
+Обновление конкретного инстанса — с тем же `STACK`:
+
+```bash
+git pull && sudo STACK=vika-opros bash deploy.sh vika-opros.domen.ru admin@domen.ru
+```
+
 ## Резервное копирование
 
 Все данные хранятся в одном файле — `data/app.db`. Для резервной копии достаточно

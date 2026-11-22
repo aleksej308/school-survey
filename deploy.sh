@@ -8,6 +8,10 @@
 # Пример:
 #   sudo bash deploy.sh опросы.школа.рф admin@школа.рф
 #
+# Несколько независимых инстансов на одном сервере (своя БД и контейнер у каждого):
+#   sudo STACK=vika-opros bash deploy.sh vika-opros.domen.ru admin@domen.ru
+# (без STACK инстанс получает имя school-survey — как при первом деплое)
+#
 # Скрипт идемпотентен: безопасно запускать повторно при обновлениях.
 # HTTPS-конфиг nginx пишется самим скриптом (certbot НЕ модифицирует конфиг),
 # поэтому повторный запуск не ломает уже настроенный SSL.
@@ -17,6 +21,11 @@ set -euo pipefail
 DOMAIN="${1:-}"
 EMAIL="${2:-}"
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Имя инстанса: определяет имена контейнера, образа, volume с БД
+# и файла конфига nginx. По умолчанию — school-survey (как при первом деплое),
+# поэтому существующая установка обновляется без изменений.
+STACK="${STACK:-school-survey}"
 
 if [[ -z "$DOMAIN" ]]; then
   echo "Использование: sudo bash deploy.sh <домен> [email]" >&2
@@ -53,22 +62,31 @@ if ! command -v nginx >/dev/null; then
 fi
 
 # ---------- выбор свободного хост-порта ----------
+# Порт запоминаем в /etc/school-survey-ports/<STACK>, чтобы при повторных
+# запусках и обновлениях инстанс не перескакивал между портами.
+PORT_FILE="/etc/school-survey-ports/${STACK}"
 APP_PORT="${APP_PORT:-}"
 if [[ -z "$APP_PORT" ]]; then
-  APP_PORT=3000
-  if command -v ss >/dev/null && ss -ltn 2>/dev/null | grep -q ":3000 "; then
-    for p in $(seq 8080 8099); do
-      if ! ss -ltn 2>/dev/null | grep -q ":${p} "; then APP_PORT=$p; break; fi
-    done
+  if [[ -f "$PORT_FILE" ]]; then
+    APP_PORT="$(cat "$PORT_FILE")"
+  else
+    APP_PORT=3000
+    if command -v ss >/dev/null && ss -ltn 2>/dev/null | grep -q ":3000 "; then
+      for p in $(seq 8080 8099); do
+        if ! ss -ltn 2>/dev/null | grep -q ":${p} "; then APP_PORT=$p; break; fi
+      done
+    fi
   fi
 fi
-echo "==> Хост-порт приложения: ${APP_PORT}"
+mkdir -p "$(dirname "$PORT_FILE")"
+echo "$APP_PORT" > "$PORT_FILE"
+echo "==> Хост-порт приложения (${STACK}): ${APP_PORT}"
 
 # ---------- приложение ----------
-echo "==> Сборка и запуск приложения"
+echo "==> Сборка и запуск приложения (${STACK})"
 cd "$APP_DIR"
-export ADMIN_PASSWORD TRUST_PROXY=1 BIND_HOST=127.0.0.1 APP_PORT
-"${COMPOSE[@]}" up -d --build
+export ADMIN_PASSWORD TRUST_PROXY=1 BIND_HOST=127.0.0.1 APP_PORT STACK
+"${COMPOSE[@]}" -p "$STACK" up -d --build
 
 # ---------- HTTPS-сертификат (выпускаем один раз, если его ещё нет) ----------
 CERT_PATH="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
@@ -81,7 +99,8 @@ if [[ ! -f "$CERT_PATH" ]]; then
   fi
 
   # Временный HTTP-конфиг, чтобы certbot прошёл проверку домена.
-  cat > /etc/nginx/sites-available/school-survey <<EOF
+  # Имя файла конфига = имя инстанса, чтобы несколько доменов не перетирали друг друга.
+  cat > "/etc/nginx/sites-available/${STACK}" <<EOF
 server {
     listen 80;
     server_name ${DOMAIN};
@@ -95,7 +114,7 @@ server {
     }
 }
 EOF
-  ln -sf /etc/nginx/sites-available/school-survey /etc/nginx/sites-enabled/school-survey
+  ln -sf "/etc/nginx/sites-available/${STACK}" "/etc/nginx/sites-enabled/${STACK}"
   nginx -t && systemctl reload nginx
 
   CERT_ARGS=(certonly --nginx -d "$DOMAIN" --non-interactive --agree-tos)
@@ -119,7 +138,7 @@ fi
 
 # ---------- финальный nginx-конфиг (HTTP→HTTPS + SSL), пишется всегда ----------
 echo "==> Настройка nginx (HTTPS)"
-cat > /etc/nginx/sites-available/school-survey <<EOF
+cat > "/etc/nginx/sites-available/${STACK}" <<EOF
 server {
     listen 80;
     server_name ${DOMAIN};
@@ -146,7 +165,7 @@ server {
     }
 }
 EOF
-ln -sf /etc/nginx/sites-available/school-survey /etc/nginx/sites-enabled/school-survey
+ln -sf "/etc/nginx/sites-available/${STACK}" "/etc/nginx/sites-enabled/${STACK}"
 # Чужие конфиги не трогаем — только проверяем и перезагружаем nginx.
 nginx -t && systemctl reload nginx
 
@@ -158,7 +177,8 @@ fi
 
 echo
 echo "====================================================="
-echo " Готово! Приложение доступно: https://${DOMAIN}"
-echo " Данные БД — в volume school-survey_survey-data."
-echo " Для обновления: git pull && sudo bash deploy.sh ${DOMAIN} ${EMAIL}"
+echo " Готово! Инстанс «${STACK}» доступен: https://${DOMAIN}"
+echo " Данные БД — в volume ${STACK}_survey-data."
+echo " Контейнер: ${STACK}, порт: ${APP_PORT}."
+echo " Для обновления: git pull && sudo STACK=${STACK} bash deploy.sh ${DOMAIN} ${EMAIL}"
 echo "====================================================="
