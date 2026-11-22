@@ -386,3 +386,66 @@ a.survey-card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(1
 .donut-center { font-size: 22px; font-weight: 700; fill: var(--text); }
 .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 8px; vertical-align: -1px; }
 table td.total, tr.total td { font-weight: 600; background: #f8fafc; }
+
+/* ---------- крупные экраны (десктоп) ---------- */
+@media (min-width: 1024px) {
+  html, body { font-size: 17px; }
+  .small { font-size: 14px; }
+
+  .container { max-width: 920px; padding: 36px 24px; }
+  .container.wide { max-width: 1280px; }
+  .admin-layout { max-width: 1320px; }
+
+  h1 { font-size: 28px; }
+  h2 { font-size: 23px; }
+  h3 { font-size: 19px; }
+
+  .card { padding: 24px; margin-bottom: 18px; }
+
+  .btn { min-height: 52px; padding: 12px 24px; font-size: 16px; border-radius: 11px; }
+  .btn.small { min-height: 42px; padding: 8px 16px; font-size: 15px; }
+
+  input[type="text"], input[type="password"], input[type="number"], select, textarea {
+    min-height: 52px; padding: 13px 14px; font-size: 17px; border-radius: 11px;
+  }
+  label { font-size: 15px; }
+
+  .hero { padding: 44px 16px 28px; }
+  .hero .logo { font-size: 56px; }
+  .hero h1 { margin: 10px 0 8px; }
+  .hero p { font-size: 18px; max-width: 640px; }
+  .hero-logo { height: 108px; width: 108px; border-radius: 20px; }
+  .hero-photo { max-width: 640px; max-height: 320px; }
+
+  .cards-grid { gap: 20px; }
+  .admin-main .cards-grid { grid-template-columns: repeat(3, 1fr); }
+  .survey-card { padding: 26px; }
+  .survey-card .sc-title { font-size: 20px; }
+  .survey-card .sc-desc { font-size: 16px; }
+
+  .app-header { padding: 16px 20px; }
+  .app-header .brand { font-size: 21px; }
+  .brand-logo { height: 42px; width: 42px; }
+  .role-badge { font-size: 13px; padding: 6px 14px; }
+  .sidebar nav a { font-size: 16px; padding: 14px 16px; }
+
+  .question-card { padding: 22px; }
+  .question-card .q-text { font-size: 19px; }
+  .option { padding: 16px 18px; font-size: 17px; border-radius: 12px; }
+
+  .kiosk { max-width: 840px; }
+  .kiosk .q-text { font-size: 24px; }
+  .kiosk .question-card { padding: 30px; }
+  .kiosk .option { padding: 18px 20px; font-size: 18px; }
+
+  .report-q .q-title { font-size: 19px; }
+  .bar-label { font-size: 15px; }
+  .bar-track { height: 12px; }
+  .donut { width: 170px; height: 170px; }
+  .donut-center { font-size: 26px; }
+  .swatch { width: 14px; height: 14px; }
+
+  .editor-question { padding: 20px; }
+  table { font-size: 15px; }
+  th, td { padding: 12px 14px; }
+}
