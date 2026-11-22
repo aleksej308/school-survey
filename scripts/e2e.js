@@ -230,6 +230,82 @@ async function waitServer() {
   const closedSurvey = (await req('GET', `/api/admin/surveys/${closedId}`)).data.survey;
   check('published_at проставлен', !!closedSurvey.published_at);
 
+  // 18. тип «шкала»
+  r = await req('POST', '/api/admin/surveys', {
+    title: 'Опрос со шкалой',
+    questions: [
+      { text: 'Оцени питание', type: 'scale', required: true, scale_max: 10, options: [] },
+      { text: 'Оцени перемены', type: 'scale', required: false, options: [] }
+    ]
+  });
+  const scaleId = r.data.survey.id;
+  check('создать опрос со шкалой', r.status === 200 && r.data.survey.questions[0].type === 'scale' && r.data.survey.questions[0].scale_max === 10);
+  r = await req('POST', `/api/admin/surveys/${scaleId}/publish`, { published: true });
+  check('опубликовать шкалу без вариантов -> 200', r.status === 200);
+  const scaleQs = (await req('GET', `/api/survey/${scaleId}`)).data.questions;
+  r = await req('POST', `/api/survey/${scaleId}/submit`, {
+    first_name: 'Оля', last_name: 'Оценкина', class_id: classA,
+    answers: [{ question_id: scaleQs[0].id, scale: 8 }, { question_id: scaleQs[1].id, scale: 999 }]
+  });
+  check('отправить шкалу (вторая оценка вне диапазона отброшена) -> 200', r.status === 200);
+  delete jar[`taken_${scaleId}`];
+  r = await req('POST', `/api/survey/${scaleId}/submit`, {
+    first_name: 'Петр', last_name: 'Пятёркин', class_id: classA,
+    answers: [{ question_id: scaleQs[1].id, scale: 5 }]
+  });
+  check('обязательная шкала без ответа -> 400', r.status === 400 && /оценку/i.test(r.data.error));
+  const scaleReport = (await req('GET', `/api/admin/surveys/${scaleId}/report`)).data;
+  const sq = scaleReport.questions[0];
+  check('отчёт по шкале: средняя 8, распределение 10 значений', sq.average === 8 && sq.distribution.length === 10 && sq.distribution[7].count === 1);
+  const bdScale = (await req('GET', `/api/admin/surveys/${scaleId}/breakdown`)).data;
+  check('разбивка по классам: средняя шкалы по классу', bdScale.questions[0].averages[classA] === 8);
+
+  // 19. дублирование опроса
+  r = await req('POST', `/api/admin/surveys/${surveyId}/duplicate`);
+  check('дубликат -> 200 черновик с теми же вопросами', r.status === 200 && r.data.survey.published === 0 && r.data.survey.title.endsWith('(копия)') && r.data.survey.questions.length === 3);
+  const dupId = r.data.survey.id;
+  r = await req('DELETE', `/api/admin/surveys/${dupId}`);
+  check('удалить опрос -> 200', r.status === 200);
+  r = await req('GET', `/api/admin/surveys/${dupId}`);
+  check('удалённый опрос -> 404', r.status === 404);
+
+  // 20. участники: только администратору
+  r = await req('GET', `/api/admin/surveys/${surveyId}/participants`);
+  check('участники (админ) -> 200 с ФИО', r.status === 200 && r.data.participants.length === 1 && r.data.participants[0].first_name === 'Иван' && r.data.by_class.length === 1);
+  const editorJar = { ...jar };
+  jar = {};
+  await req('POST', '/api/admin/login', { password: 'editor123' });
+  r = await req('GET', `/api/admin/surveys/${surveyId}/participants`);
+  check('участники (редактор) -> 401', r.status === 401);
+  jar = editorJar;
+
+  // 21. дашборд
+  r = await req('GET', '/api/admin/dashboard');
+  check('дашборд: счётчики и 14 дней', r.status === 200 && typeof r.data.responses_total === 'number' && r.data.by_day.length === 14 && Array.isArray(r.data.top));
+
+  // 22. массовое создание классов
+  r = await req('POST', '/api/admin/classes', { names: ['ЕГЭ-класс', '9А', '11Б'] });
+  check('bulk-классы: создан только новый', r.status === 200 && r.data.created.length === 2);
+  const allClasses = (await req('GET', '/api/admin/classes')).data.classes;
+  check('класс: счётчик ответов присутствует', allClasses.every((c) => typeof c.responses_count === 'number'));
+  const idxOf = (name) => allClasses.findIndex((c) => c.name === name);
+  check('классы: естественная сортировка 9А < 10Б < 11Б', idxOf('9А') < idxOf('10Б') && idxOf('10Б') < idxOf('11Б'));
+
+  // 23. короткая ссылка /s/:id -> редирект на опрос
+  {
+    const res = await fetch(BASE + `/s/${surveyId}`, { redirect: 'manual' });
+    check('/s/:id -> 302 на /#/login/:id', res.status === 302 && (res.headers.get('location') || '') === `/#/login/${surveyId}`);
+  }
+
+  // 24. bootstrap: метаданные карточек
+  r = await req('GET', '/api/bootstrap');
+  const openCard = r.data.surveys.find((s) => s.id === surveyId);
+  check('bootstrap: questions_count у опроса', openCard && openCard.questions_count === 3 && openCard.state === 'open');
+
+  // 25. загрузка изображений: только JPEG
+  r = await req('POST', '/api/admin/upload?kind=logo', 'not an image at all');
+  check('upload: не-JPEG -> 400', r.status === 400);
+
   console.log(`\nИТОГО: ${pass} прошло, ${fail} упало`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error('ERROR:', e.message); process.exit(2); });

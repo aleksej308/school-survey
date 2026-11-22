@@ -28,9 +28,9 @@ const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
 const ADMIN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 // Ограничение попыток входа администратора (защита от перебора пароля).
+// Хранится в БД, поэтому не сбрасывается перезапуском сервера.
 const LOGIN_MAX_ATTEMPTS = 5;             // попыток
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;   // за 15 минут
-const loginAttempts = new Map();          // ip -> { count, resetAt }
 
 // Признак защищённого (HTTPS) соединения — нужен, чтобы ставить флаг Secure у cookie.
 function isSecureReq(req) {
@@ -218,9 +218,12 @@ function route(method, pattern, handler) {
 /* ===== Публичные ===== */
 
 route('GET', '/api/bootstrap', (req, res) => {
-  const surveys = db.listSurveys(false).filter((s) => s.published).map((s) => ({
+  const surveys = db.listSurveys(true).filter((s) => s.published).map((s) => ({
     id: s.id, title: s.title, description: s.description,
-    state: db.surveyState(s)
+    state: db.surveyState(s),
+    questions_count: Number(s.questions_count || 0),
+    open_at: s.open_at || null,
+    close_at: s.close_at || null
   }));
   const classes = db.listClasses();
   const schoolName = db.getSetting('school_name') || 'Школа № 197';
@@ -249,6 +252,7 @@ route('GET', '/api/survey/:id', (req, res, params) => {
       text: q.text,
       type: q.type,
       required: !!q.required,
+      scale_max: q.scale_max || 5,
       options: q.options.map((o) => ({ id: o.id, text: o.text }))
     }))
   });
@@ -325,6 +329,11 @@ function validateAnswers(survey, answers) {
       const a = list.find((x) => Number(x.question_id) === q.id);
       const tv = (a && a.text ? String(a.text).trim() : '');
       if (q.required && !tv) throw new Error(`Ответьте на вопрос: ${q.text}`);
+    } else if (q.type === 'scale') {
+      const a = list.find((x) => Number(x.question_id) === q.id);
+      const v = a ? Number(a.scale != null ? a.scale : a.text) : NaN;
+      const ok = Number.isInteger(v) && v >= 1 && v <= (q.scale_max || 5);
+      if (q.required && !ok) throw new Error(`Поставьте оценку в вопросе: ${q.text}`);
     } else {
       const a = list.find((x) => Number(x.question_id) === q.id);
       let ids = a && Array.isArray(a.option_ids) ? a.option_ids : (a && a.option_ids ? [a.option_ids] : []);
@@ -347,9 +356,9 @@ route('POST', '/api/admin/login', async (req, res) => {
   if (isCrossSite(req)) { sendJson(res, 403, { error: 'Запрос отклонён' }); return; }
   const ip = auth.getClientIp(req, TRUST_PROXY);
   const now = Date.now();
-  const entry = loginAttempts.get(ip);
-  if (entry && entry.resetAt > now && entry.count >= LOGIN_MAX_ATTEMPTS) {
-    const waitMin = Math.ceil((entry.resetAt - now) / 60000);
+  const entry = db.loginAttemptsGet(ip);
+  if (entry && entry.reset_at > now && entry.count >= LOGIN_MAX_ATTEMPTS) {
+    const waitMin = Math.ceil((entry.reset_at - now) / 60000);
     sendJson(res, 429, { error: `Слишком много попыток входа. Попробуйте через ${waitMin} мин.` });
     return;
   }
@@ -362,16 +371,12 @@ route('POST', '/api/admin/login', async (req, res) => {
   if (password && auth.verifyPassword(password, adminHash)) role = 'admin';
   else if (password && editorHash && auth.verifyPassword(password, editorHash)) role = 'editor';
   if (!role) {
-    if (!entry || entry.resetAt <= now) {
-      loginAttempts.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
-    } else {
-      entry.count += 1;
-    }
+    db.loginAttemptsFail(ip, LOGIN_WINDOW_MS);
     await new Promise((r) => setTimeout(r, 500)); // замедляем перебор
     sendJson(res, 401, { error: 'Неверный пароль' });
     return;
   }
-  loginAttempts.delete(ip);
+  db.loginAttemptsClear(ip);
   const token = auth.createAdminToken(SESSION_SECRET, ADMIN_TTL_MS, role);
   setCookie(res, 'admin_token', token, { maxAge: Math.floor(ADMIN_TTL_MS / 1000), httpOnly: true, secure: isSecureReq(req) });
   sendJson(res, 200, { ok: true, role });
@@ -448,7 +453,17 @@ route('POST', '/api/admin/classes', async (req, res) => {
   let body;
   try { body = await readJson(req); } catch (e) { sendJson(res, 400, { error: e.message }); return; }
   try {
-    sendJson(res, 200, { class: db.createClass(body.name) });
+    // Одна строка: {name: "9А"} или массив: {names: ["9А", "9Б"]}.
+    if (Array.isArray(body.names)) {
+      const created = db.createClasses(body.names);
+      if (created.length === 0) {
+        sendJson(res, 400, { error: 'Все классы из списка уже существуют' });
+        return;
+      }
+      sendJson(res, 200, { created, classes: db.listClasses() });
+    } else {
+      sendJson(res, 200, { class: db.createClass(body.name) });
+    }
   } catch (e) {
     sendJson(res, 400, { error: e.message.includes('UNIQUE') ? 'Такой класс уже существует' : e.message });
   }
@@ -543,6 +558,63 @@ route('GET', '/api/admin/surveys/:id/history', (req, res, params) => {
   sendJson(res, 200, { history: db.getPublishHistory(Number(params.id)) });
 });
 
+// Копия опроса как черновик (удобно для повторяющихся опросов и правок
+// после появления ответов).
+route('POST', '/api/admin/surveys/:id/duplicate', (req, res, params) => {
+  if (!requireStaff(req, res)) return;
+  if (isCrossSite(req)) { sendJson(res, 403, { error: 'Запрос отклонён' }); return; }
+  try {
+    sendJson(res, 200, { survey: db.duplicateSurvey(Number(params.id)) });
+  } catch (e) {
+    sendJson(res, 400, { error: e.message });
+  }
+});
+
+// Участники опроса с персональными данными (ФИО) — только администратору.
+route('GET', '/api/admin/surveys/:id/participants', (req, res, params) => {
+  if (!requireAdmin(req, res)) return;
+  const s = db.getSurvey(Number(params.id));
+  if (!s) { sendJson(res, 404, { error: 'Опрос не найден' }); return; }
+  sendJson(res, 200, db.getParticipants(Number(params.id)));
+});
+
+// Сводка для дашборда админки.
+route('GET', '/api/admin/dashboard', (req, res) => {
+  if (!requireStaff(req, res)) return;
+  sendJson(res, 200, db.getDashboard());
+});
+
+// Загрузка логотипа и фото школы (только администратор).
+// Клиент отправляет уже сжатый JPEG (нормализация/кадрирование — на клиенте),
+// сервер проверяет тип и размер и пишет в public/img/logo.jpg | photo.jpg.
+route('POST', '/api/admin/upload', async (req, res, params, url) => {
+  if (!requireAdmin(req, res)) return;
+  if (isCrossSite(req)) { sendJson(res, 403, { error: 'Запрос отклонён' }); return; }
+  const kind = url.searchParams.get('kind') === 'photo' ? 'photo' : 'logo';
+  const ct = String(req.headers['content-type'] || '');
+  if (!ct.startsWith('image/jpeg')) { sendJson(res, 400, { error: 'Ожидается изображение JPEG' }); return; }
+  const buf = await new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > 3 * 1024 * 1024) { reject(new Error('Файл больше 3 МБ')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  }).catch((e) => e);
+  if (buf instanceof Error) { sendJson(res, 400, { error: buf.message }); return; }
+  if (buf.length < 100) { sendJson(res, 400, { error: 'Пустой файл' }); return; }
+  // Магические байты JPEG: FF D8 FF
+  if (buf[0] !== 0xFF || buf[1] !== 0xD8 || buf[2] !== 0xFF) {
+    sendJson(res, 400, { error: 'Файл не похож на JPEG' }); return;
+  }
+  const dest = path.join(PUBLIC_DIR, 'img', kind === 'photo' ? 'photo.jpg' : 'logo.jpg');
+  fs.writeFileSync(dest, buf);
+  sendJson(res, 200, { ok: true, url: `/img/${kind === 'photo' ? 'photo' : 'logo'}.jpg?v=${Date.now()}` });
+});
+
 // Сохранение черновика — без жёсткой проверки: пустой заголовок заменяем,
 // а вопросы/варианты сохраняем как есть (пустые отбрасываются в db.insertQuestions).
 function prepareSurveyBody(body) {
@@ -564,7 +636,7 @@ function validateForPublish(survey) {
   for (const q of survey.questions) {
     const text = String(q.text || '').trim();
     if (!text) throw new Error('Нельзя опубликовать: есть вопрос без текста.');
-    if (q.type !== 'text') {
+    if (q.type !== 'text' && q.type !== 'scale') {
       const opts = (q.options || []).map(db.optionText).filter(Boolean);
       if (opts.length < 2) {
         throw new Error(`Нельзя опубликовать: в вопросе «${text}» нужно минимум 2 варианта ответа.`);
@@ -599,16 +671,17 @@ route('GET', '/api/admin/surveys/:id/report/individual', (req, res, params) => {
 
 function formatDate(sqliteDate) {
   if (!sqliteDate) return '';
-  // sqlite datetime('now') => "YYYY-MM-DD HH:MM:SS" (UTC)
+  // sqlite datetime('now') => "YYYY-MM-DD HH:MM:SS" (UTC); показываем в поясе сервера
+  // (задаётся TZ, см. Dockerfile).
   const d = new Date(sqliteDate.replace(' ', 'T') + 'Z');
   if (isNaN(d.getTime())) return String(sqliteDate);
-  return d.toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', hour12: false });
+  return d.toLocaleString('ru-RU', { hour12: false });
 }
 
-function buildReportXlsx(surveyId) {
+function buildReportXlsx(surveyId, withParticipants) {
   const summary = db.getSummary(surveyId);
   const survey = summary.survey;
-  const typeLabel = { single: 'Один вариант', multiple: 'Несколько вариантов', text: 'Свободный ответ' };
+  const typeLabel = { single: 'Один вариант', multiple: 'Несколько вариантов', text: 'Свободный ответ', scale: 'Шкала' };
 
   const summaryRows = [
     [{ v: 'Вопрос', bold: true }, { v: 'Вариант / ответ', bold: true }, { v: 'Кол-во', bold: true }, { v: 'Доля (%)', bold: true }]
@@ -619,6 +692,11 @@ function buildReportXlsx(surveyId) {
       summaryRows.push(['', { v: `Всего ответов: ${q.total}` }, '', '']);
       for (const a of q.answers) {
         summaryRows.push(['', a.text, a.class || '', '']);
+      }
+    } else if (q.type === 'scale') {
+      summaryRows.push(['', { v: `Средняя оценка: ${String(q.average ?? '—').replace('.', ',')} из ${q.scale_max}` }, '', '']);
+      for (const d of q.distribution) {
+        summaryRows.push(['', `Оценка ${d.value}`, d.count, d.percent]);
       }
     } else {
       for (const o of q.options) {
@@ -647,16 +725,58 @@ function buildReportXlsx(surveyId) {
     answerRows.push(row);
   });
 
-  return buildXlsx([
+  const sheets = [
     { name: 'Сводка', rows: summaryRows },
     { name: 'Ответы', rows: answerRows }
-  ]);
+  ];
+
+  // Лист «По классам»: варианты × классы.
+  const bd = db.getBreakdown(surveyId);
+  if (bd.classes.length > 0) {
+    const rows = [[
+      { v: 'Вопрос', bold: true }, { v: 'Вариант', bold: true },
+      ...bd.classes.map((c) => ({ v: c.name, bold: true }))
+    ]];
+    for (const q of bd.questions) {
+      if (q.type === 'scale') {
+        for (let v = 1; v <= (q.scale_max || 5); v++) {
+          rows.push([q.text, `Оценка ${v}`, ...bd.classes.map((c) => ((q.counts[c.id] || {})[v]) || 0)]);
+        }
+        rows.push([{ v: 'Средняя оценка', bold: true }, '',
+          ...bd.classes.map((c) => (q.averages[c.id] != null ? String(q.averages[c.id]).replace('.', ',') : '—'))]);
+      } else if (q.type === 'text') {
+        rows.push([q.text, 'Ответов', ...bd.classes.map((c) => q.totals[c.id] || 0)]);
+      } else {
+        for (const o of q.options) {
+          rows.push([q.text, o.text, ...bd.classes.map((c) => (o.counts[c.id] || 0))]);
+        }
+        rows.push([{ v: 'Ответило', bold: true }, '', ...bd.classes.map((c) => q.totals[c.id] || 0)]);
+      }
+      rows.push([]);
+    }
+    sheets.push({ name: 'По классам', rows });
+  }
+
+  // Лист «Участники» (ФИО) — добавляем только по запросу администратора.
+  if (withParticipants) {
+    const { participants } = db.getParticipants(surveyId);
+    const rows = [[
+      { v: '№', bold: true }, { v: 'Фамилия', bold: true }, { v: 'Имя', bold: true },
+      { v: 'Класс', bold: true }, { v: 'Дата прохождения', bold: true }
+    ]];
+    participants.forEach((p, i) => {
+      rows.push([i + 1, p.last_name, p.first_name, p.class || '', formatDate(p.created_at)]);
+    });
+    sheets.push({ name: 'Участники', rows });
+  }
+
+  return buildXlsx(sheets);
 }
 
 function buildReportPdf(surveyId) {
   const summary = db.getSummary(surveyId);
   const survey = summary.survey;
-  const typeLabel = { single: '(один вариант)', multiple: '(несколько вариантов)', text: '(свободный ответ)' };
+  const typeLabel = { single: '(один вариант)', multiple: '(несколько вариантов)', text: '(свободный ответ)', scale: '(шкала)' };
 
   const sections = [];
   let idx = 0;
@@ -668,6 +788,12 @@ function buildReportPdf(surveyId) {
       if (q.answers.length === 0) lines.push('— ответов нет —');
       for (const a of q.answers) {
         lines.push(`• ${a.text}${a.class ? ' (' + a.class + ')' : ''}`);
+      }
+    } else if (q.type === 'scale') {
+      if (q.average != null) lines.push(`Средняя оценка: ${String(q.average).replace('.', ',')} из ${q.scale_max}`);
+      if (q.total === 0) lines.push('— ответов нет —');
+      for (const d of q.distribution) {
+        lines.push(`• Оценка ${d.value} — ${d.count} (${d.percent}%)`);
       }
     } else {
       if (q.total === 0) lines.push('— ответов нет —');
@@ -693,7 +819,7 @@ route('GET', '/api/admin/surveys/:id/export.xlsx', (req, res, params) => {
   if (!requireStaff(req, res)) return;
   const survey = db.getSurvey(Number(params.id));
   if (!survey) { sendJson(res, 404, { error: 'Опрос не найден' }); return; }
-  const buf = buildReportXlsx(Number(params.id));
+  const buf = buildReportXlsx(Number(params.id), isAdmin(req));
   const safeName = survey.title.replace(/[^\wа-яА-ЯёЁ\- ]+/g, '').trim() || 'survey';
   sendBuffer(res, 200, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buf, `Отчёт_${safeName}.xlsx`);
 });
@@ -723,9 +849,11 @@ const server = http.createServer(async (req, res) => {
     // HEAD обрабатываем как GET (тело ответа Node отбросит автоматически).
     const method = req.method === 'HEAD' ? 'GET' : req.method;
 
-    // Статический маршрут /s/:id — отдаём index.html
-    if (method === 'GET' && /^\/s\/\d+/.test(pathname)) {
-      serveStatic(req, res, '/index.html');
+    // Короткая ссылка /s/:id — редирект на экран опроса (для QR-кодов).
+    if (method === 'GET' && /^\/s\/(\d+)/.test(pathname)) {
+      const sid = RegExp.$1;
+      res.writeHead(302, { Location: `/#/login/${sid}`, 'Cache-Control': 'no-store' });
+      res.end();
       return;
     }
 
