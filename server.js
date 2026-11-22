@@ -575,11 +575,19 @@ function validateForPublish(survey) {
 
 /* ===== Админ: отчёты ===== */
 
-route('GET', '/api/admin/surveys/:id/report', (req, res, params) => {
+route('GET', '/api/admin/surveys/:id/report', (req, res, params, url) => {
   if (!requireStaff(req, res)) return;
-  const summary = db.getSummary(Number(params.id));
+  const classId = url && url.searchParams.get('class_id') ? Number(url.searchParams.get('class_id')) : null;
+  const summary = db.getSummary(Number(params.id), classId);
   if (!summary) { sendJson(res, 404, { error: 'Опрос не найден' }); return; }
   sendJson(res, 200, summary);
+});
+
+route('GET', '/api/admin/surveys/:id/breakdown', (req, res, params) => {
+  if (!requireStaff(req, res)) return;
+  const bd = db.getBreakdown(Number(params.id));
+  if (!bd) { sendJson(res, 404, { error: 'Опрос не найден' }); return; }
+  sendJson(res, 200, bd);
 });
 
 route('GET', '/api/admin/surveys/:id/report/individual', (req, res, params) => {
@@ -610,7 +618,7 @@ function buildReportXlsx(surveyId) {
     if (q.type === 'text') {
       summaryRows.push(['', { v: `Всего ответов: ${q.total}` }, '', '']);
       for (const a of q.answers) {
-        summaryRows.push(['', a.text, a.class ? `${a.first_name} ${a.last_name} (${a.class})` : `${a.first_name} ${a.last_name}`, '']);
+        summaryRows.push(['', a.text, a.class || '', '']);
       }
     } else {
       for (const o of q.options) {
@@ -622,7 +630,7 @@ function buildReportXlsx(surveyId) {
 
   const questionTexts = summary.questions.map((q) => q.text);
   const answerRows = [
-    [{ v: '№', bold: true }, { v: 'Имя', bold: true }, { v: 'Фамилия', bold: true }, { v: 'Класс', bold: true }, { v: 'Дата', bold: true },
+    [{ v: '№', bold: true }, { v: 'Класс', bold: true }, { v: 'Дата', bold: true },
       ...questionTexts.map((t) => ({ v: t, bold: true }))]
   ];
   const responses = db.getIndividualAnswers(surveyId);
@@ -632,7 +640,7 @@ function buildReportXlsx(surveyId) {
       if (!byQuestion[a.question_id]) byQuestion[a.question_id] = [];
       byQuestion[a.question_id].push(a.option_text || a.text_value);
     }
-    const row = [r.id, r.first_name, r.last_name, r.class || '', formatDate(r.created_at)];
+    const row = [r.id, r.class || '', formatDate(r.created_at)];
     for (const q of summary.questions) {
       row.push((byQuestion[q.id] || []).join('; '));
     }
@@ -659,7 +667,7 @@ function buildReportPdf(surveyId) {
       lines.push(`Всего ответов: ${q.total}`);
       if (q.answers.length === 0) lines.push('— ответов нет —');
       for (const a of q.answers) {
-        lines.push(`• ${a.text} (${a.first_name} ${a.last_name}${a.class ? ', ' + a.class : ''})`);
+        lines.push(`• ${a.text}${a.class ? ' (' + a.class + ')' : ''}`);
       }
     } else {
       if (q.total === 0) lines.push('— ответов нет —');

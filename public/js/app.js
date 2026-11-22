@@ -109,6 +109,7 @@ function renderAdminLogin(app) {
         <div class="center">
           <img src="/img/logo.jpg" class="hero-logo" style="height:64px;width:64px" alt="Логотип">
           <h2 style="margin-top:8px">${esc(schoolName)}</h2>
+          <p class="small muted">Вход для администратора и редактора</p>
         </div>
         <div id="loginErr"></div>
         <div class="field"><label>Пароль</label><input id="pw" type="password" autocomplete="current-password"></div>
@@ -169,7 +170,7 @@ async function viewHome(app) {
       </div>
       <img src="/img/photo.jpg" class="hero-photo" alt="Фото школы">
       <div class="cards-grid">${cards}</div>
-      <p class="center small muted"><a href="#/admin">Вход для администратора</a></p>
+      <p class="center small muted"><a href="#/admin">Вход для администратора и редактора</a></p>
     </div>`;
 }
 
@@ -596,34 +597,91 @@ async function viewClasses(app) {
 
 /* ----- отчёт ----- */
 
+const CHART_COLORS = ['#2563eb', '#16a34a', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#f97316', '#64748b'];
+
+function donutSvg(options, total) {
+  if (!total) return '';
+  const r = 40, cx = 70, cy = 70;
+  const C = 2 * Math.PI * r;
+  let offset = 0;
+  let circles = '';
+  options.forEach((o, i) => {
+    if (o.count <= 0) return;
+    const frac = o.count / total;
+    const len = frac * C;
+    const color = CHART_COLORS[i % CHART_COLORS.length];
+    circles += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}" stroke-width="26" stroke-dasharray="${len} ${C - len}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${cx} ${cy})"></circle>`;
+    offset += len;
+  });
+  return `<svg viewBox="0 0 140 140" class="donut" aria-hidden="true">${circles}<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" class="donut-center">${total}</text></svg>`;
+}
+
+function renderQuestionSection(q) {
+  if (q.type === 'text') {
+    const answers = q.answers.length
+      ? q.answers.map((a) => `<span class="answer-chip">${esc(a.text)}${a.class ? ` <span class="muted small">(${esc(a.class)})</span>` : ''}</span>`).join('')
+      : '<span class="muted">— ответов нет —</span>';
+    return `<div class="report-q">
+      <div class="q-title">${esc(q.text)} <span class="muted small">(свободный ответ)</span></div>
+      <p class="small muted">Всего ответов: ${q.total}</p>${answers}
+    </div>`;
+  }
+  const typeLabel = q.type === 'single' ? 'один вариант' : 'несколько вариантов';
+  const donut = q.type === 'single' ? `<div class="chart-row">${donutSvg(q.options, q.total)}</div>` : '';
+  const bars = q.options.length === 0
+    ? '<span class="muted">— нет вариантов —</span>'
+    : q.options.map((o, i) => {
+        const color = CHART_COLORS[i % CHART_COLORS.length];
+        return `<div class="bar-row">
+          <div class="bar-label"><span><span class="swatch" style="background:${color}"></span>${esc(o.text)}</span><span>${o.count} · ${o.percent}%</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:${o.percent}%;background:${color}"></div></div>
+        </div>`;
+      }).join('');
+  return `<div class="report-q">
+    <div class="q-title">${esc(q.text)} <span class="muted small">(${typeLabel})</span></div>
+    <p class="small muted">Ответило: ${q.total}</p>
+    ${donut}
+    ${bars}
+  </div>`;
+}
+
+function renderBreakdown(d) {
+  const classes = d.classes || [];
+  if (!classes.length) return '<div class="empty">Ответов пока нет.</div>';
+  const sections = d.questions.map((q) => {
+    if (q.type === 'text') {
+      const cells = classes.map((c) => `<td>${q.totals[c.id] || 0}</td>`).join('');
+      return `<div class="report-q">
+        <div class="q-title">${esc(q.text)} <span class="muted small">(свободный ответ — количество)</span></div>
+        <div class="table-wrap"><table><thead><tr><th>Класс</th>${classes.map((c) => `<th>${esc(c.name)}</th>`).join('')}</tr></thead><tbody><tr><td>Ответов</td>${cells}</tr></tbody></table></div>
+      </div>`;
+    }
+    const rows = q.options.map((o) => {
+      const cells = classes.map((c) => {
+        const cnt = o.counts[c.id] || 0;
+        const tot = q.totals[c.id] || 0;
+        const pct = tot ? Math.round((cnt / tot) * 100) : 0;
+        return `<td>${cnt}${tot ? ` <span class="muted small">(${pct}%)</span>` : ''}</td>`;
+      }).join('');
+      return `<tr><td>${esc(o.text)}</td>${cells}</tr>`;
+    }).join('');
+    const totalRow = `<tr><td class="muted">Ответило</td>${classes.map((c) => `<td>${q.totals[c.id] || 0}</td>`).join('')}</tr>`;
+    return `<div class="report-q">
+      <div class="q-title">${esc(q.text)}</div>
+      <div class="table-wrap"><table><thead><tr><th>Вариант</th>${classes.map((c) => `<th>${esc(c.name)}</th>`).join('')}</tr></thead><tbody>${rows}${totalRow}</tbody></table></div>
+    </div>`;
+  }).join('');
+  return `<h2>Разбивка по классам</h2>${sections}`;
+}
+
 async function viewReport(app, id) {
   if (!await ensureStaff()) { renderAdminLogin(app); return; }
   const data = await api('GET', `/api/admin/surveys/${id}/report`);
-  const typeLabel = { single: 'Один вариант', multiple: 'Несколько вариантов', text: 'Свободный ответ' };
+  const classes = data.classes || [];
+  const filterOptions = '<option value="">Все классы</option>' +
+    classes.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
 
-  const sections = data.questions.map((q) => {
-    let body;
-    if (q.type === 'text') {
-      const answers = q.answers.length
-        ? q.answers.map((a) => `<span class="answer-chip">${esc(a.text)}${a.class ? ` <span class="muted small">(${esc(a.first_name)} ${esc(a.last_name)}, ${esc(a.class)})</span>` : ''}</span>`).join('')
-        : '<span class="muted">— ответов нет —</span>';
-      body = `<p class="small muted">Всего ответов: ${q.total}</p>${answers}`;
-    } else {
-      body = q.options.length === 0
-        ? '<span class="muted">— нет вариантов —</span>'
-        : q.options.map((o) => `
-          <div class="bar-row">
-            <div class="bar-label"><span>${esc(o.text)}</span><span>${o.count} · ${o.percent}%</span></div>
-            <div class="bar-track"><div class="bar-fill" style="width:${o.percent}%"></div></div>
-          </div>`).join('');
-      body = `<p class="small muted">Ответило: ${q.total}</p>${body}`;
-    }
-    return `<div class="report-q">
-      <div class="q-title">${esc(q.text)} <span class="muted small">(${typeLabel[q.type]})</span></div>
-      ${body}
-    </div>`;
-  }).join('');
-
+  const sections = data.questions.map(renderQuestionSection).join('');
   const pubMeta = data.survey.published_at ? `<p class="muted">Опубликован: ${formatDate(data.survey.published_at)}</p>` : '';
 
   app.innerHTML = adminShell('Отчёт', 'surveys', `
@@ -631,17 +689,48 @@ async function viewReport(app, id) {
       <h2>${esc(data.survey.title)}</h2>
       <p class="muted">Всего ответов: ${data.responses_count}</p>
       ${pubMeta}
+      <div class="field" style="max-width:280px">
+        <label>Класс (фильтр)</label>
+        <select id="classFilter">${filterOptions}</select>
+      </div>
       <div class="btn-row">
         <a class="btn" href="/api/admin/surveys/${id}/export.xlsx">⬇ Excel (.xlsx)</a>
         <a class="btn soft" href="/api/admin/surveys/${id}/export.pdf">⬇ PDF</a>
+        <button class="btn ghost" id="toggleBreakdown">Разбивка по классам</button>
         <button class="btn ghost" id="toggleInd">Индивидуальные ответы</button>
         <button class="btn ghost" id="toggleHist">История публикаций</button>
       </div>
     </div>
-    <div class="card">${sections}</div>
+    <div id="summaryWrap"><div class="card">${sections}</div></div>
+    <div id="breakdown" class="card" style="display:none"></div>
     <div id="individual" class="card" style="display:none"></div>
     <div id="history" class="card" style="display:none"></div>
     <p class="center small muted"><a href="#/admin/surveys">← К списку опросов</a></p>`);
+
+  document.getElementById('classFilter').addEventListener('change', async (e) => {
+    const cid = e.target.value;
+    try {
+      const url = cid ? `/api/admin/surveys/${id}/report?class_id=${cid}` : `/api/admin/surveys/${id}/report`;
+      const d = await api('GET', url);
+      document.getElementById('summaryWrap').innerHTML = `<div class="card">${d.questions.map(renderQuestionSection).join('')}</div>`;
+    } catch (err) { toast(err.message); }
+  });
+
+  let bdLoaded = false;
+  document.getElementById('toggleBreakdown').addEventListener('click', async () => {
+    const box = document.getElementById('breakdown');
+    if (box.style.display === 'none') {
+      if (!bdLoaded) {
+        box.innerHTML = '<div class="spinner"></div>';
+        const d = await api('GET', `/api/admin/surveys/${id}/breakdown`);
+        box.innerHTML = renderBreakdown(d);
+        bdLoaded = true;
+      }
+      box.style.display = 'block';
+    } else {
+      box.style.display = 'none';
+    }
+  });
 
   let indLoaded = false;
   document.getElementById('toggleInd').addEventListener('click', async () => {
@@ -688,7 +777,7 @@ function renderHistory(history) {
 function renderIndividual(d) {
   if (d.responses.length === 0) return '<div class="empty">Ответов пока нет.</div>';
   const qs = d.survey.questions;
-  const head = ['№', 'Имя', 'Фамилия', 'Класс', 'Дата', ...qs.map((q) => q.text)]
+  const head = ['№', 'Класс', 'Дата', ...qs.map((q) => q.text)]
     .map((h) => `<th>${esc(h)}</th>`).join('');
   const rows = d.responses.map((r) => {
     const byQ = {};
@@ -696,11 +785,11 @@ function renderIndividual(d) {
       if (!byQ[a.question_id]) byQ[a.question_id] = [];
       byQ[a.question_id].push(a.option_text || a.text_value);
     }
-    const cells = [r.id, r.first_name, r.last_name, r.class || '', formatDate(r.created_at),
+    const cells = [r.id, r.class || '', formatDate(r.created_at),
       ...qs.map((q) => esc((byQ[q.id] || []).join('; ')))];
     return `<tr>${cells.map((c) => `<td>${c}</td>`).join('')}</tr>`;
   }).join('');
-  return `<h2>Индивидуальные ответы</h2><div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<h2>Индивидуальные ответы</h2><p class="small muted">Ответы без персональных данных.</p><div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 /* ----- настройки ----- */

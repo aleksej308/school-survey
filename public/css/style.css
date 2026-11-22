@@ -379,3 +379,10 @@ a.survey-card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(1
 .history-list { margin-top: 8px; }
 .history-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
 .history-item:last-child { border-bottom: none; }
+
+/* ---------- диаграммы отчёта ---------- */
+.chart-row { display: flex; justify-content: center; margin: 6px 0 14px; }
+.donut { width: 140px; height: 140px; }
+.donut-center { font-size: 22px; font-weight: 700; fill: var(--text); }
+.swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 8px; vertical-align: -1px; }
+table td.total, tr.total td { font-weight: 600; background: #f8fafc; }

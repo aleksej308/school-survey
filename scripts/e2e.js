@@ -141,9 +141,28 @@ async function waitServer() {
   const q0 = r.data.questions[0];
   check('сводка: вариант имеет count=1, percent=100', q0.options.some((o) => o.count === 1 && o.percent === 100));
 
-  // 13. индивидуальные ответы
+  // 13. индивидуальные ответы (без персональных данных)
   r = await req('GET', `/api/admin/surveys/${surveyId}/report/individual`);
   check('индивидуальные: 1 запись', r.status === 200 && r.data.responses.length === 1);
+  check('индивидуальные: без имени/фамилии', r.data.responses[0].first_name === undefined && r.data.responses[0].last_name === undefined && r.data.responses[0].ip === undefined);
+
+  // 13.1 анонимизация текстовых ответов
+  const textQ = r.data.survey.questions.find((q) => q.type === 'text');
+  if (textQ) {
+    const s2 = (await req('GET', `/api/admin/surveys/${surveyId}/report`)).data;
+    const tq = s2.questions.find((q) => q.type === 'text');
+    check('сводка: текстовый ответ без имени', tq.answers.length === 1 && tq.answers[0].first_name === undefined && tq.answers[0].text === 'Больше перемен');
+  }
+
+  // 13.2 разбивка по классам
+  r = await req('GET', `/api/admin/surveys/${surveyId}/breakdown`);
+  check('разбивка: классы есть', r.status === 200 && r.data.classes.length === 1 && r.data.classes[0].name === '9А');
+  const bq = r.data.questions.find((q) => q.type === 'single');
+  check('разбивка: вариант с количеством по классу', bq.options.some((o) => (o.counts[classA] || 0) === 1));
+
+  // 13.3 фильтр по классу
+  r = await req('GET', `/api/admin/surveys/${surveyId}/report?class_id=${classA}`);
+  check('фильтр по классу: 1 ответ', r.status === 200 && r.data.responses_count === 1);
 
   // 13.5 защита: нельзя менять вопросы при наличии ответов
   const modifiedQ = JSON.parse(JSON.stringify(surveyPayload));
