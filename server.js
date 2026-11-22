@@ -18,6 +18,9 @@ const { buildPdf } = require('./lib/pdf');
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const FONT_PATH = process.env.FONT_PATH || path.join(ROOT, 'fonts', 'DejaVuSans.ttf');
+// Загруженные админом логотип/фото: живут в data/ (volume), переживают
+// пересборку контейнера и раздаются вместо файлов из public/img.
+const UPLOADS_DIR = path.join(ROOT, 'data', 'uploads');
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -615,8 +618,8 @@ route('POST', '/api/admin/upload', async (req, res, params, url) => {
   if (buf[0] !== 0xFF || buf[1] !== 0xD8 || buf[2] !== 0xFF) {
     sendJson(res, 400, { error: 'Файл не похож на JPEG' }); return;
   }
-  const dest = path.join(PUBLIC_DIR, 'img', kind === 'photo' ? 'photo.jpg' : 'logo.jpg');
-  fs.writeFileSync(dest, buf);
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  fs.writeFileSync(path.join(UPLOADS_DIR, kind === 'photo' ? 'photo.jpg' : 'logo.jpg'), buf);
   sendJson(res, 200, { ok: true, url: `/img/${kind === 'photo' ? 'photo' : 'logo'}.jpg?v=${Date.now()}` });
 });
 
@@ -859,6 +862,17 @@ const server = http.createServer(async (req, res) => {
       const sid = RegExp.$1;
       res.writeHead(302, { Location: `/#/login/${sid}`, 'Cache-Control': 'no-store' });
       res.end();
+      return;
+    }
+
+    // Пользовательские логотип/фото — из data/uploads, поверх статики из public/img.
+    if (method === 'GET' && (pathname === '/img/logo.jpg' || pathname === '/img/photo.jpg')) {
+      const customPath = path.join(UPLOADS_DIR, path.basename(pathname));
+      fs.readFile(customPath, (err, data) => {
+        if (err) { serveStatic(req, res, pathname); return; }
+        res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Content-Length': data.length, 'Cache-Control': 'no-cache' });
+        res.end(data);
+      });
       return;
     }
 

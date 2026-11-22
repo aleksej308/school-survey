@@ -78,7 +78,7 @@ async function api(method, url, body, raw) {
   }
   if (raw) {
     opts.headers['Content-Type'] = raw.type || 'application/octet-stream';
-    opts.body = raw.body;
+    opts.body = body; // само содержимое (Blob/Buffer), raw только задаёт тип
   }
   const res = await fetch(url, opts);
   const ct = res.headers.get('content-type') || '';

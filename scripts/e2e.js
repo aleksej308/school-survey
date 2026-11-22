@@ -302,9 +302,23 @@ async function waitServer() {
   const openCard = r.data.surveys.find((s) => s.id === surveyId);
   check('bootstrap: questions_count у опроса', openCard && openCard.questions_count === 3 && openCard.state === 'open');
 
-  // 25. загрузка изображений: только JPEG
+  // 25. загрузка изображений: только JPEG; валидный JPEG принимается и раздаётся
   r = await req('POST', '/api/admin/upload?kind=logo', 'not an image at all');
   check('upload: не-JPEG -> 400', r.status === 400);
+  {
+    const fs = require('fs');
+    const path = require('path');
+    const jpeg = fs.readFileSync(path.join(__dirname, '..', 'public', 'img', 'logo.jpg'));
+    const res = await fetch(BASE + '/api/admin/upload?kind=logo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'image/jpeg', Cookie: cookieHeader() },
+      body: jpeg
+    });
+    const data = await res.json().catch(() => null);
+    check('upload: валидный JPEG -> 200 ok', res.status === 200 && data && data.ok === true, data);
+    const served = await fetch(BASE + '/img/logo.jpg');
+    check('upload: файл раздаётся того же размера', served.status === 200 && (await served.arrayBuffer()).byteLength === jpeg.length);
+  }
 
   console.log(`\nИТОГО: ${pass} прошло, ${fail} упало`);
   process.exit(fail ? 1 : 0);
