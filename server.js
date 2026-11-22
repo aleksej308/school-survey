@@ -24,6 +24,9 @@ const HOST = process.env.HOST || '0.0.0.0';
 const TRUST_PROXY = process.env.TRUST_PROXY === '1';
 // На общей школьной сети (один внешний IP на всех) держите ENFORCE_IP=0.
 const ENFORCE_IP = process.env.ENFORCE_IP === '1';
+// Режим «без классов» (CLASSES_ENABLED=0): участник указывает только имя и фамилию,
+// раздел «Классы» и разбивка по классам скрываются. Для проектных порталов.
+const CLASSES_ENABLED = process.env.CLASSES_ENABLED !== '0';
 const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
 const ADMIN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -225,9 +228,9 @@ route('GET', '/api/bootstrap', (req, res) => {
     open_at: s.open_at || null,
     close_at: s.close_at || null
   }));
-  const classes = db.listClasses();
+  const classes = CLASSES_ENABLED ? db.listClasses() : [];
   const schoolName = db.getSetting('school_name') || 'Школа № 197';
-  sendJson(res, 200, { surveys, classes, school_name: schoolName });
+  sendJson(res, 200, { surveys, classes, school_name: schoolName, classes_enabled: CLASSES_ENABLED });
 });
 
 route('GET', '/api/classes', (req, res) => {
@@ -275,18 +278,20 @@ route('POST', '/api/survey/:id/submit', async (req, res, params) => {
 
   const firstName = String(body.first_name || '').trim();
   const lastName = String(body.last_name || '').trim();
-  const classId = body.class_id ? Number(body.class_id) : null;
+  const classId = CLASSES_ENABLED && body.class_id ? Number(body.class_id) : null;
 
   const missing = [];
   if (!firstName) missing.push('имя');
   if (!lastName) missing.push('фамилию');
-  if (!classId) missing.push('класс');
+  if (CLASSES_ENABLED && !classId) missing.push('класс');
   if (missing.length) {
     sendJson(res, 400, { error: `Необходимо указать: ${missing.join(', ')}` });
     return;
   }
-  const cls = db.getClass(classId);
-  if (!cls) { sendJson(res, 400, { error: 'Указан неверный класс' }); return; }
+  if (CLASSES_ENABLED) {
+    const cls = db.getClass(classId);
+    if (!cls) { sendJson(res, 400, { error: 'Указан неверный класс' }); return; }
+  }
 
   // Проверка «один раз»
   // 1) cookie: с этого устройства уже отправляли этот опрос
@@ -389,7 +394,7 @@ route('POST', '/api/admin/logout', (req, res) => {
 
 route('GET', '/api/admin/me', (req, res) => {
   const role = staffRole(req);
-  sendJson(res, 200, { authed: !!role, role: role || null });
+  sendJson(res, 200, { authed: !!role, role: role || null, classes_enabled: CLASSES_ENABLED });
 });
 
 route('POST', '/api/admin/change-password', async (req, res) => {

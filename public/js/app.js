@@ -261,11 +261,13 @@ function stackedBarsSvg(question, classes) {
 
 let currentRole = null;
 let schoolName = 'Школа № 197';
+let classesEnabled = true; // фич-флаг CLASSES_ENABLED (сервер может отключить классы)
 
 async function ensureStaff() {
   try {
     const d = await api('GET', '/api/admin/me');
     currentRole = d.authed ? (d.role || 'admin') : null;
+    if (typeof d.classes_enabled === 'boolean') classesEnabled = d.classes_enabled;
     if (d.school_name) schoolName = d.school_name;
     return currentRole;
   } catch {
@@ -304,7 +306,7 @@ function adminShell(title, active, contentHtml, extraNav = '') {
         <nav>
           ${link('#/admin', 'Обзор', 'dashboard', 'dashboard')}
           ${link('#/admin/surveys', 'Опросы', 'surveys', 'surveys')}
-          ${link('#/admin/classes', 'Классы', 'classes', 'classes')}
+          ${classesEnabled ? link('#/admin/classes', 'Классы', 'classes', 'classes') : ''}
           ${currentRole === 'admin' ? link('#/admin/settings', 'Настройки', 'settings', 'settings') : ''}
           <a href="#" data-action="logout">${icon('logout')}<span>Выйти</span></a>
         </nav>
@@ -402,6 +404,7 @@ async function viewHome(app) {
 
 async function viewLogin(app, id) {
   const data = await api('GET', '/api/bootstrap');
+  if (typeof data.classes_enabled === 'boolean') classesEnabled = data.classes_enabled;
   const survey = (data.surveys || []).find((s) => s.id === Number(id));
   if (!survey) {
     setTitle('Опрос не найден');
@@ -409,10 +412,11 @@ async function viewLogin(app, id) {
     return;
   }
   setTitle(survey.title);
-  if (data.classes.length === 0) {
+  if (classesEnabled && data.classes.length === 0) {
     app.innerHTML = `<div class="container"><div class="card"><div class="error-banner">Список классов ещё не настроен. Обратитесь к администратору.</div><a class="btn" href="#/">На главную</a></div></div>`;
     return;
   }
+  const needClass = classesEnabled;
   const options = data.classes.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
   app.innerHTML = `
     <div class="container">
@@ -420,11 +424,11 @@ async function viewLogin(app, id) {
         <div class="center" style="margin-bottom:8px"><img src="/img/logo.jpg" class="hero-logo" style="height:52px;width:52px" alt=""></div>
         <h1>${esc(survey.title)}</h1>
         ${survey.description ? `<p class="muted">${esc(survey.description)}</p>` : ''}
-        <p class="small muted">Для участия обязательно укажите имя, фамилию и класс.</p>
+        <p class="small muted">${needClass ? 'Для участия обязательно укажите имя, фамилию и класс.' : 'Для участия укажите имя и фамилию.'}</p>
         <div id="loginError"></div>
         <div class="field"><label>Имя</label><input id="fname" type="text" autocomplete="given-name" placeholder="Иван"></div>
         <div class="field"><label>Фамилия</label><input id="lname" type="text" autocomplete="family-name" placeholder="Иванов"></div>
-        <div class="field"><label>Класс</label><select id="cls"><option value="">— выберите класс —</option>${options}</select></div>
+        ${needClass ? `<div class="field"><label>Класс</label><select id="cls"><option value="">— выберите класс —</option>${options}</select></div>` : ''}
         <button class="btn block" id="startBtn">Начать опрос</button>
       </div>
       <p class="center small muted"><a href="#/">← На главную</a></p>
@@ -433,17 +437,19 @@ async function viewLogin(app, id) {
   document.getElementById('startBtn').addEventListener('click', () => {
     const first = document.getElementById('fname').value.trim();
     const last = document.getElementById('lname').value.trim();
-    const classId = document.getElementById('cls').value;
+    const classId = needClass ? document.getElementById('cls').value : null;
     const missing = [];
     if (!first) missing.push('имя');
     if (!last) missing.push('фамилию');
-    if (!classId) missing.push('класс');
+    if (needClass && !classId) missing.push('класс');
     if (missing.length) {
       document.getElementById('loginError').innerHTML =
         `<div class="error-banner">Необходимо указать: ${missing.map(esc).join(', ')}.</div>`;
       return;
     }
-    sessionStorage.setItem(`resp_${id}`, JSON.stringify({ first_name: first, last_name: last, class_id: Number(classId) }));
+    const respData = { first_name: first, last_name: last };
+    if (needClass) respData.class_id = Number(classId);
+    sessionStorage.setItem(`resp_${id}`, JSON.stringify(respData));
     location.hash = `#/survey/${id}`;
   });
 }
@@ -1130,6 +1136,10 @@ function renderPreview(app, survey) {
 
 async function viewClasses(app) {
   if (!await ensureStaff()) { renderAdminLogin(app); return; }
+  if (!classesEnabled) {
+    app.innerHTML = adminShell('Раздел отключён', 'classes', '<div class="error-banner">На этом портале классы не используются (CLASSES_ENABLED=0).</div>');
+    return;
+  }
   setTitle('Классы');
   const data = await api('GET', '/api/admin/classes');
   const classes = data.classes;
@@ -1338,6 +1348,7 @@ function renderHistory(history) {
 function renderIndividual(d) {
   if (d.responses.length === 0) return '<div class="empty">Ответов пока нет.</div>';
   const qs = d.survey.questions;
+  const showClass = classesEnabled;
   const PAGE = 25;
   let page = 0;
   let query = '';
@@ -1355,16 +1366,17 @@ function renderIndividual(d) {
 
   function tableHtml() {
     const slice = filtered.slice(page * PAGE, page * PAGE + PAGE);
-    const head = ['№', 'Класс', 'Дата', ...qs.map((q) => q.text)]
-      .map((h) => `<th>${esc(h)}</th>`).join('');
+    const headCols = showClass ? ['№', 'Класс', 'Дата', ...qs.map((q) => q.text)] : ['№', 'Дата', ...qs.map((q) => q.text)];
+    const head = headCols.map((h) => `<th>${esc(h)}</th>`).join('');
     const rows = slice.map((r) => {
       const byQ = {};
       for (const a of r.answers) {
         if (!byQ[a.question_id]) byQ[a.question_id] = [];
         byQ[a.question_id].push(a.option_text || a.text_value);
       }
-      const cells = [r.id, r.class || '', fmtDb(r.created_at),
-        ...qs.map((q) => esc((byQ[q.id] || []).join('; ')))];
+      const cells = showClass
+        ? [r.id, r.class || '', fmtDb(r.created_at), ...qs.map((q) => esc((byQ[q.id] || []).join('; ')))]
+        : [r.id, fmtDb(r.created_at), ...qs.map((q) => esc((byQ[q.id] || []).join('; ')))];
       return `<tr>${cells.map((c) => `<td>${c}</td>`).join('')}</tr>`;
     }).join('');
     const nav = pages() > 1 ? `
@@ -1398,14 +1410,15 @@ function renderIndividual(d) {
 
 function renderParticipants(d) {
   if (!d.participants.length) return '<div class="empty">Ответов пока нет.</div>';
-  const chips = d.by_class.map((c) =>
-    `<span class="answer-chip">${esc(c.name)}: <b>${c.count}</b></span>`).join('');
+  const showClass = classesEnabled;
+  const chips = showClass ? d.by_class.map((c) =>
+    `<span class="answer-chip">${esc(c.name)}: <b>${c.count}</b></span>`).join('') : '';
   const rows = d.participants.map((p, i) => `
-    <tr><td>${i + 1}</td><td>${esc(p.last_name)} ${esc(p.first_name)}</td><td>${esc(p.class || '')}</td><td>${fmtDb(p.created_at)}</td></tr>`).join('');
+    <tr><td>${i + 1}</td><td>${esc(p.last_name)} ${esc(p.first_name)}</td>${showClass ? `<td>${esc(p.class || '')}</td>` : ''}<td>${fmtDb(p.created_at)}</td></tr>`).join('');
   return `
     <p class="small muted">Список прошедших опрос. Раздел доступен только администратору; редактор персональные данные не видит.</p>
-    <div style="margin-bottom:12px">${chips}</div>
-    <div class="table-wrap"><table><thead><tr><th>№</th><th>Фамилия и имя</th><th>Класс</th><th>Дата</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    ${chips ? `<div style="margin-bottom:12px">${chips}</div>` : ''}
+    <div class="table-wrap"><table><thead><tr><th>№</th><th>Фамилия и имя</th>${showClass ? '<th>Класс</th>' : ''}<th>Дата</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 async function viewReport(app, id) {
@@ -1421,7 +1434,7 @@ async function viewReport(app, id) {
 
   const tabs = [
     { key: 'summary', label: 'Сводка' },
-    { key: 'breakdown', label: 'По классам' }
+    ...(classesEnabled ? [{ key: 'breakdown', label: 'По классам' }] : [])
   ];
   if (currentRole === 'admin') tabs.push({ key: 'participants', label: 'Участники' });
   tabs.push({ key: 'individual', label: 'Индивидуальные' }, { key: 'history', label: 'История' });
@@ -1429,7 +1442,7 @@ async function viewReport(app, id) {
   app.innerHTML = adminShell(`Отчёт: ${data.survey.title}`, 'surveys', `
     <div class="card">
       <h2>${esc(data.survey.title)}</h2>
-      <p class="muted">Всего ответов: ${data.responses_count}${classes.length ? ` · ${classes.length} ${plural(classes.length, 'класс', 'класса', 'классов')} отвечали` : ''}</p>
+      <p class="muted">Всего ответов: ${data.responses_count}${classesEnabled && classes.length ? ` · ${classes.length} ${plural(classes.length, 'класс', 'класса', 'классов')} отвечали` : ''}</p>
       ${pubMeta}
       <div class="report-overview">
         ${data.by_day && data.by_day.length ? `
@@ -1440,10 +1453,11 @@ async function viewReport(app, id) {
         <a class="btn soft" href="/api/admin/surveys/${id}/export.pdf">${icon('download')} PDF</a>
         <button class="btn ghost" id="shareBtn">${icon('qr')} Ссылка и QR</button>
       </div>
+      ${classesEnabled ? `
       <div class="field no-print" style="max-width:280px;margin-top:12px">
         <label>Класс (фильтр сводки)</label>
         <select id="classFilter">${filterOptions}</select>
-      </div>
+      </div>` : ''}
     </div>
     <div class="tabs no-print" id="reportTabs">
       ${tabs.map((t, i) => `<button class="tab ${i === 0 ? 'active' : ''}" data-tab="${t.key}">${t.label}</button>`).join('')}
@@ -1507,7 +1521,8 @@ async function viewReport(app, id) {
 
   document.getElementById('shareBtn').addEventListener('click', () => showShareModal(id, data.survey.title));
 
-  document.getElementById('classFilter').addEventListener('change', async (e) => {
+  const classFilter = document.getElementById('classFilter');
+  if (classFilter) classFilter.addEventListener('change', async (e) => {
     const cid = e.target.value;
     try {
       const url = cid ? `/api/admin/surveys/${id}/report?class_id=${cid}` : `/api/admin/surveys/${id}/report`;

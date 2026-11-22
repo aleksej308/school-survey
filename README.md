@@ -103,6 +103,7 @@ docker run -d --name school-survey \
 | `ADMIN_PASSWORD`  | `admin123`     | Пароль администратора при первом запуске |
 | `SURVEY_DB`       | `data/app.db`  | Путь к файлу базы данных SQLite |
 | `TRUST_PROXY`     | `0`            | `1` — доверять заголовкам `X-Forwarded-For` (за nginx) |
+| `CLASSES_ENABLED` | `1`            | `0` — портал без классов: ученик указывает только имя и фамилию, раздел «Классы» и разбивка по классам скрываются |
 | `ENFORCE_IP`      | `0`            | `1` — дополнительно блокировать повтор с одного IP |
 | `FONT_PATH`       | `fonts/DejaVuSans.ttf` | Шрифт для PDF (нужна кириллица) |
 

@@ -85,7 +85,7 @@ echo "==> Хост-порт приложения (${STACK}): ${APP_PORT}"
 # ---------- приложение ----------
 echo "==> Сборка и запуск приложения (${STACK})"
 cd "$APP_DIR"
-export ADMIN_PASSWORD TRUST_PROXY=1 BIND_HOST=127.0.0.1 APP_PORT STACK
+export ADMIN_PASSWORD TRUST_PROXY=1 BIND_HOST=127.0.0.1 APP_PORT STACK CLASSES_ENABLED="${CLASSES_ENABLED:-1}"
 "${COMPOSE[@]}" -p "$STACK" up -d --build
 
 # ---------- HTTPS-сертификат (выпускаем один раз, если его ещё нет) ----------
