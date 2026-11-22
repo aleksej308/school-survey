@@ -360,6 +360,7 @@ async function viewHome(app) {
   setTitle(null);
   const data = await api('GET', '/api/bootstrap');
   if (data.school_name) schoolName = data.school_name;
+  if (typeof data.classes_enabled === 'boolean') classesEnabled = data.classes_enabled;
   const surveys = data.surveys || [];
   let cards;
   if (!surveys.length) {
@@ -393,7 +394,7 @@ async function viewHome(app) {
         <img src="/img/logo.jpg" class="hero-logo" alt="Логотип">
         <div class="hero-text">
           <h1>${esc(schoolName)}</h1>
-          <p class="muted">Выберите опрос, укажите имя, фамилию и класс — и ответьте на вопросы.</p>
+          <p class="muted">${classesEnabled ? 'Выберите опрос, укажите имя, фамилию и класс — и ответьте на вопросы.' : 'Выберите опрос, укажите имя и фамилию — и ответьте на вопросы.'}</p>
         </div>
       </div>
       <img src="/img/photo.jpg" class="hero-photo" alt="Фото школы">
