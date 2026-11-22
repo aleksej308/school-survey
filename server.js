@@ -123,13 +123,30 @@ function getAdminToken(req) {
   return auth.parseCookies(req)['admin_token'] || null;
 }
 
-function isAdmin(req) {
+// Роль текущего пользователя: 'admin' | 'editor' | null.
+function staffRole(req) {
   return auth.verifyAdminToken(getAdminToken(req), SESSION_SECRET);
+}
+
+function isAdmin(req) {
+  return staffRole(req) === 'admin';
+}
+
+function isStaff(req) {
+  return !!staffRole(req);
 }
 
 function requireAdmin(req, res) {
   if (!isAdmin(req)) {
-    sendJson(res, 401, { error: 'Требуется вход администратора' });
+    sendJson(res, 401, { error: 'Требуются права администратора' });
+    return false;
+  }
+  return true;
+}
+
+function requireStaff(req, res) {
+  if (!isStaff(req)) {
+    sendJson(res, 401, { error: 'Требуется вход' });
     return false;
   }
   return true;
@@ -202,10 +219,12 @@ function route(method, pattern, handler) {
 
 route('GET', '/api/bootstrap', (req, res) => {
   const surveys = db.listSurveys(false).filter((s) => s.published).map((s) => ({
-    id: s.id, title: s.title, description: s.description
+    id: s.id, title: s.title, description: s.description,
+    state: db.surveyState(s)
   }));
   const classes = db.listClasses();
-  sendJson(res, 200, { surveys, classes });
+  const schoolName = db.getSetting('school_name') || 'Школа № 197';
+  sendJson(res, 200, { surveys, classes, school_name: schoolName });
 });
 
 route('GET', '/api/classes', (req, res) => {
@@ -218,6 +237,9 @@ route('GET', '/api/survey/:id', (req, res, params) => {
     sendJson(res, 404, { error: 'Опрос не найден или не опубликован' });
     return;
   }
+  const state = db.surveyState(s);
+  if (state === 'scheduled') { sendJson(res, 404, { error: 'Опрос ещё не начался' }); return; }
+  if (state === 'closed') { sendJson(res, 404, { error: 'Опрос завершён' }); return; }
   sendJson(res, 200, {
     id: s.id,
     title: s.title,
@@ -243,6 +265,9 @@ route('POST', '/api/survey/:id/submit', async (req, res, params) => {
     sendJson(res, 404, { error: 'Опрос не найден или не опубликован' });
     return;
   }
+  const surveyState = db.surveyState(survey);
+  if (surveyState === 'scheduled') { sendJson(res, 409, { error: 'Опрос ещё не начался' }); return; }
+  if (surveyState === 'closed') { sendJson(res, 409, { error: 'Опрос завершён' }); return; }
 
   const firstName = String(body.first_name || '').trim();
   const lastName = String(body.last_name || '').trim();
@@ -331,8 +356,12 @@ route('POST', '/api/admin/login', async (req, res) => {
   let body;
   try { body = await readJson(req); } catch (e) { sendJson(res, 400, { error: e.message }); return; }
   const password = String(body.password || '');
-  const hash = db.getSetting('admin_password_hash');
-  if (!password || !auth.verifyPassword(password, hash)) {
+  const adminHash = db.getSetting('admin_password_hash');
+  const editorHash = db.getSetting('editor_password_hash');
+  let role = null;
+  if (password && auth.verifyPassword(password, adminHash)) role = 'admin';
+  else if (password && editorHash && auth.verifyPassword(password, editorHash)) role = 'editor';
+  if (!role) {
     if (!entry || entry.resetAt <= now) {
       loginAttempts.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
     } else {
@@ -343,9 +372,9 @@ route('POST', '/api/admin/login', async (req, res) => {
     return;
   }
   loginAttempts.delete(ip);
-  const token = auth.createAdminToken(SESSION_SECRET, ADMIN_TTL_MS);
+  const token = auth.createAdminToken(SESSION_SECRET, ADMIN_TTL_MS, role);
   setCookie(res, 'admin_token', token, { maxAge: Math.floor(ADMIN_TTL_MS / 1000), httpOnly: true, secure: isSecureReq(req) });
-  sendJson(res, 200, { ok: true });
+  sendJson(res, 200, { ok: true, role });
 });
 
 route('POST', '/api/admin/logout', (req, res) => {
@@ -354,7 +383,8 @@ route('POST', '/api/admin/logout', (req, res) => {
 });
 
 route('GET', '/api/admin/me', (req, res) => {
-  sendJson(res, 200, { authed: isAdmin(req) });
+  const role = staffRole(req);
+  sendJson(res, 200, { authed: !!role, role: role || null });
 });
 
 route('POST', '/api/admin/change-password', async (req, res) => {
@@ -373,15 +403,47 @@ route('POST', '/api/admin/change-password', async (req, res) => {
   sendJson(res, 200, { ok: true });
 });
 
+// Настройки портала (название школы) — только администратор.
+route('GET', '/api/admin/settings', (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  sendJson(res, 200, {
+    school_name: db.getSetting('school_name') || 'Школа № 197',
+    editor_enabled: !!db.getSetting('editor_password_hash')
+  });
+});
+
+route('POST', '/api/admin/settings', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  if (isCrossSite(req)) { sendJson(res, 403, { error: 'Запрос отклонён' }); return; }
+  let body;
+  try { body = await readJson(req); } catch (e) { sendJson(res, 400, { error: e.message }); return; }
+  const name = String(body.school_name || '').trim();
+  if (!name) { sendJson(res, 400, { error: 'Название школы не может быть пустым' }); return; }
+  db.setSetting('school_name', name);
+  sendJson(res, 200, { ok: true, school_name: name });
+});
+
+// Пароль редактора — только администратор.
+route('POST', '/api/admin/editor-password', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  if (isCrossSite(req)) { sendJson(res, 403, { error: 'Запрос отклонён' }); return; }
+  let body;
+  try { body = await readJson(req); } catch (e) { sendJson(res, 400, { error: e.message }); return; }
+  const next = String(body.next || '');
+  if (next && next.length < 6) { sendJson(res, 400, { error: 'Пароль редактора должен содержать не менее 6 символов' }); return; }
+  db.setSetting('editor_password_hash', next ? auth.hashPassword(next) : '');
+  sendJson(res, 200, { ok: true });
+});
+
 /* ===== Админ: классы ===== */
 
 route('GET', '/api/admin/classes', (req, res) => {
-  if (!requireAdmin(req, res)) return;
+  if (!requireStaff(req, res)) return;
   sendJson(res, 200, { classes: db.listClasses() });
 });
 
 route('POST', '/api/admin/classes', async (req, res) => {
-  if (!requireAdmin(req, res)) return;
+  if (!requireStaff(req, res)) return;
   if (isCrossSite(req)) { sendJson(res, 403, { error: 'Запрос отклонён' }); return; }
   let body;
   try { body = await readJson(req); } catch (e) { sendJson(res, 400, { error: e.message }); return; }
@@ -393,7 +455,7 @@ route('POST', '/api/admin/classes', async (req, res) => {
 });
 
 route('PUT', '/api/admin/classes/:id', async (req, res, params) => {
-  if (!requireAdmin(req, res)) return;
+  if (!requireStaff(req, res)) return;
   if (isCrossSite(req)) { sendJson(res, 403, { error: 'Запрос отклонён' }); return; }
   let body;
   try { body = await readJson(req); } catch (e) { sendJson(res, 400, { error: e.message }); return; }
@@ -405,7 +467,7 @@ route('PUT', '/api/admin/classes/:id', async (req, res, params) => {
 });
 
 route('DELETE', '/api/admin/classes/:id', (req, res, params) => {
-  if (!requireAdmin(req, res)) return;
+  if (!requireStaff(req, res)) return;
   if (isCrossSite(req)) { sendJson(res, 403, { error: 'Запрос отклонён' }); return; }
   db.deleteClass(Number(params.id));
   sendJson(res, 200, { ok: true });
@@ -414,12 +476,12 @@ route('DELETE', '/api/admin/classes/:id', (req, res, params) => {
 /* ===== Админ: опросы ===== */
 
 route('GET', '/api/admin/surveys', (req, res) => {
-  if (!requireAdmin(req, res)) return;
+  if (!requireStaff(req, res)) return;
   sendJson(res, 200, { surveys: db.listSurveys(true) });
 });
 
 route('POST', '/api/admin/surveys', async (req, res) => {
-  if (!requireAdmin(req, res)) return;
+  if (!requireStaff(req, res)) return;
   if (isCrossSite(req)) { sendJson(res, 403, { error: 'Запрос отклонён' }); return; }
   let body;
   try { body = await readJson(req); } catch (e) { sendJson(res, 400, { error: e.message }); return; }
@@ -431,14 +493,14 @@ route('POST', '/api/admin/surveys', async (req, res) => {
 });
 
 route('GET', '/api/admin/surveys/:id', (req, res, params) => {
-  if (!requireAdmin(req, res)) return;
+  if (!requireStaff(req, res)) return;
   const s = db.getSurvey(Number(params.id));
   if (!s) { sendJson(res, 404, { error: 'Опрос не найден' }); return; }
   sendJson(res, 200, { survey: s });
 });
 
 route('PUT', '/api/admin/surveys/:id', async (req, res, params) => {
-  if (!requireAdmin(req, res)) return;
+  if (!requireStaff(req, res)) return;
   if (isCrossSite(req)) { sendJson(res, 403, { error: 'Запрос отклонён' }); return; }
   let body;
   try { body = await readJson(req); } catch (e) { sendJson(res, 400, { error: e.message }); return; }
@@ -450,14 +512,14 @@ route('PUT', '/api/admin/surveys/:id', async (req, res, params) => {
 });
 
 route('DELETE', '/api/admin/surveys/:id', (req, res, params) => {
-  if (!requireAdmin(req, res)) return;
+  if (!requireStaff(req, res)) return;
   if (isCrossSite(req)) { sendJson(res, 403, { error: 'Запрос отклонён' }); return; }
   db.deleteSurvey(Number(params.id));
   sendJson(res, 200, { ok: true });
 });
 
 route('POST', '/api/admin/surveys/:id/publish', async (req, res, params) => {
-  if (!requireAdmin(req, res)) return;
+  if (!requireStaff(req, res)) return;
   if (isCrossSite(req)) { sendJson(res, 403, { error: 'Запрос отклонён' }); return; }
   let body;
   try { body = await readJson(req); } catch (e) { sendJson(res, 400, { error: e.message }); return; }
@@ -468,10 +530,17 @@ route('POST', '/api/admin/surveys/:id/publish', async (req, res, params) => {
       if (!survey) throw new Error('Опрос не найден');
       validateForPublish(survey);
     }
-    sendJson(res, 200, { survey: db.setPublished(surveyId, !!body.published) });
+    sendJson(res, 200, { survey: db.setPublished(surveyId, !!body.published, staffRole(req)) });
   } catch (e) {
     sendJson(res, 400, { error: e.message });
   }
+});
+
+route('GET', '/api/admin/surveys/:id/history', (req, res, params) => {
+  if (!requireStaff(req, res)) return;
+  const s = db.getSurvey(Number(params.id));
+  if (!s) { sendJson(res, 404, { error: 'Опрос не найден' }); return; }
+  sendJson(res, 200, { history: db.getPublishHistory(Number(params.id)) });
 });
 
 // Сохранение черновика — без жёсткой проверки: пустой заголовок заменяем,
@@ -480,7 +549,9 @@ function prepareSurveyBody(body) {
   return {
     title: String(body.title || '').trim() || 'Без названия',
     description: String(body.description || '').trim(),
-    questions: Array.isArray(body.questions) ? body.questions : []
+    questions: Array.isArray(body.questions) ? body.questions : [],
+    open_at: body.open_at || null,
+    close_at: body.close_at || null
   };
 }
 
@@ -505,14 +576,14 @@ function validateForPublish(survey) {
 /* ===== Админ: отчёты ===== */
 
 route('GET', '/api/admin/surveys/:id/report', (req, res, params) => {
-  if (!requireAdmin(req, res)) return;
+  if (!requireStaff(req, res)) return;
   const summary = db.getSummary(Number(params.id));
   if (!summary) { sendJson(res, 404, { error: 'Опрос не найден' }); return; }
   sendJson(res, 200, summary);
 });
 
 route('GET', '/api/admin/surveys/:id/report/individual', (req, res, params) => {
-  if (!requireAdmin(req, res)) return;
+  if (!requireStaff(req, res)) return;
   const s = db.getSurvey(Number(params.id));
   if (!s) { sendJson(res, 404, { error: 'Опрос не найден' }); return; }
   sendJson(res, 200, { survey: s, responses: db.getIndividualAnswers(Number(params.id)) });
@@ -611,7 +682,7 @@ function buildReportPdf(surveyId) {
 }
 
 route('GET', '/api/admin/surveys/:id/export.xlsx', (req, res, params) => {
-  if (!requireAdmin(req, res)) return;
+  if (!requireStaff(req, res)) return;
   const survey = db.getSurvey(Number(params.id));
   if (!survey) { sendJson(res, 404, { error: 'Опрос не найден' }); return; }
   const buf = buildReportXlsx(Number(params.id));
@@ -620,7 +691,7 @@ route('GET', '/api/admin/surveys/:id/export.xlsx', (req, res, params) => {
 });
 
 route('GET', '/api/admin/surveys/:id/export.pdf', (req, res, params) => {
-  if (!requireAdmin(req, res)) return;
+  if (!requireStaff(req, res)) return;
   const survey = db.getSurvey(Number(params.id));
   if (!survey) { sendJson(res, 404, { error: 'Опрос не найден' }); return; }
   try {

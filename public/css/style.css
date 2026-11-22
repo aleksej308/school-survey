@@ -298,3 +298,84 @@ tr:last-child td { border-bottom: none; }
   .container { padding: 24px; }
   .app-header .inner { flex-wrap: nowrap; }
 }
+
+/* ---------- брендинг ---------- */
+.brand-logo { height: 34px; width: 34px; border-radius: 8px; object-fit: cover; background: #fff; }
+.hero-logo { height: 84px; width: 84px; border-radius: 18px; object-fit: cover; box-shadow: var(--shadow); }
+.hero-photo {
+  width: 100%; max-width: 520px; margin: 6px auto 18px; display: block;
+  border-radius: var(--radius); box-shadow: var(--shadow); object-fit: cover; max-height: 240px;
+}
+.role-badge {
+  background: rgba(255,255,255,.18); color: #fff; padding: 5px 11px;
+  border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap;
+}
+
+/* ---------- карточки опросов ---------- */
+.cards-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+@media (min-width: 640px) { .cards-grid { grid-template-columns: 1fr 1fr; } }
+.survey-card {
+  display: flex; flex-direction: column; gap: 10px;
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 18px; text-decoration: none; color: var(--text);
+  transition: transform .12s, box-shadow .12s, border-color .12s;
+}
+a.survey-card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(16,24,40,.1); border-color: #c7d2fe; }
+.survey-card .sc-title { font-size: 17px; font-weight: 700; }
+.survey-card .sc-desc { color: var(--muted); font-size: 14px; flex: 1; }
+.survey-card .sc-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.survey-card .sc-btn {
+  background: var(--primary); color: #fff; border-radius: 10px; padding: 10px 16px;
+  font-weight: 600; font-size: 14px; text-align: center;
+}
+
+/* ---------- статусы ---------- */
+.badge.scheduled { background: #fef9c3; color: #a16207; }
+.badge.closed { background: #f1f5f9; color: #64748b; }
+
+/* ---------- прогресс-бар ---------- */
+.progress-wrap { position: sticky; top: 0; z-index: 15; background: var(--bg); padding: 10px 0 8px; }
+.progress-meta { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.progress-track { height: 8px; background: #e2e8f0; border-radius: 999px; overflow: hidden; }
+.progress-fill { height: 100%; background: var(--primary); border-radius: 999px; transition: width .25s; }
+
+/* ---------- полноэкранный режим опроса ---------- */
+.kiosk { max-width: 680px; margin: 0 auto; min-height: 70vh; display: flex; flex-direction: column; }
+.kiosk .question-card { font-size: 18px; padding: 24px; flex: 1; }
+.kiosk .q-text { font-size: 20px; }
+.kiosk .option { padding: 16px; font-size: 17px; border-radius: 12px; }
+.kiosk-nav { display: flex; gap: 12px; margin-top: 16px; }
+.kiosk-nav .btn { flex: 1; }
+
+/* ---------- админка: сайдбар ---------- */
+.menu-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,.16); color: #fff; border: none; border-radius: 8px;
+  min-width: 42px; min-height: 42px; font-size: 20px; cursor: pointer;
+}
+.admin-layout { display: flex; flex-direction: column; max-width: 1180px; margin: 0 auto; }
+.sidebar {
+  display: none; background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); padding: 10px; margin: 14px 0;
+}
+.sidebar.open { display: block; }
+.sidebar nav { display: flex; flex-direction: column; gap: 4px; }
+.sidebar nav a {
+  color: var(--text); padding: 12px 14px; border-radius: 10px; font-weight: 500; font-size: 15px;
+}
+.sidebar nav a:hover { background: #f1f5f9; }
+.sidebar nav a.active { background: var(--primary); color: #fff; }
+.admin-main { flex: 1; padding: 0 16px 24px; min-width: 0; }
+@media (min-width: 860px) {
+  .menu-btn { display: none; }
+  .admin-layout { flex-direction: row; gap: 20px; padding: 0 16px; }
+  .sidebar { display: block; width: 230px; flex-shrink: 0; margin: 0; position: sticky; top: 76px; align-self: flex-start; }
+  .admin-main { padding: 0; }
+}
+
+/* ---------- расписание ---------- */
+.schedule-row { display: flex; gap: 12px; flex-wrap: wrap; }
+.schedule-row .field { flex: 1; min-width: 200px; }
+.history-list { margin-top: 8px; }
+.history-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+.history-item:last-child { border-bottom: none; }

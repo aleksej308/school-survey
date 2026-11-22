@@ -171,6 +171,46 @@ async function waitServer() {
   r = await req('POST', '/api/admin/login', { password: 'newpass123' });
   check('новый пароль работает -> 200', r.status === 200);
 
+  // 16. роль редактора
+  r = await req('POST', '/api/admin/editor-password', { next: 'editor123' });
+  check('задать пароль редактора -> 200', r.status === 200);
+  r = await req('GET', '/api/admin/settings');
+  check('настройки (админ) -> 200 и editor_enabled', r.status === 200 && r.data.editor_enabled === true);
+  r = await req('POST', '/api/admin/settings', { school_name: 'Школа № 197' });
+  check('сохранить название школы -> 200', r.status === 200);
+  r = await req('POST', '/api/admin/logout', {});
+  jar = {};
+  r = await req('POST', '/api/admin/login', { password: 'editor123' });
+  check('вход редактора -> 200 role=editor', r.status === 200 && r.data.role === 'editor');
+  r = await req('GET', '/api/admin/me');
+  check('me: role=editor', r.data.role === 'editor');
+  r = await req('POST', '/api/admin/change-password', { current: 'editor123', next: 'hack123' });
+  check('редактор не меняет пароль -> 401', r.status === 401);
+  r = await req('GET', '/api/admin/settings');
+  check('редактор не видит настройки -> 401', r.status === 401);
+  r = await req('POST', '/api/admin/surveys', { title: 'Опрос редактора', questions: [{ text: 'Вопрос?', type: 'single', options: ['А', 'Б'] }] });
+  check('редактор создаёт опрос -> 200', r.status === 200);
+
+  // 17. расписание публикации (возвращаемся админом)
+  r = await req('POST', '/api/admin/logout', {});
+  jar = {};
+  await req('POST', '/api/admin/login', { password: 'newpass123' });
+  r = await req('POST', '/api/admin/surveys', { title: 'Завершённый', questions: [{ text: 'В?', type: 'text', options: [] }], close_at: '2000-01-01T00:00' });
+  const closedId = r.data.survey.id;
+  r = await req('POST', `/api/admin/surveys/${closedId}/publish`, { published: true });
+  check('публикация завершённого опроса -> 200', r.status === 200);
+  r = await req('GET', `/api/survey/${closedId}`);
+  check('закрытый опрос недоступен (404 завершён)', r.status === 404 && /завершён/i.test(r.data.error));
+  r = await req('POST', '/api/admin/surveys', { title: 'Будущий', questions: [{ text: 'В?', type: 'text', options: [] }], open_at: '2099-01-01T00:00' });
+  const futureId = r.data.survey.id;
+  r = await req('POST', `/api/admin/surveys/${futureId}/publish`, { published: true });
+  r = await req('GET', `/api/survey/${futureId}`);
+  check('будущий опрос недоступен (404 не начался)', r.status === 404 && /не начался/i.test(r.data.error));
+  r = await req('GET', `/api/admin/surveys/${closedId}/history`);
+  check('история публикаций непустая', r.status === 200 && r.data.history.length >= 1);
+  const closedSurvey = (await req('GET', `/api/admin/surveys/${closedId}`)).data.survey;
+  check('published_at проставлен', !!closedSurvey.published_at);
+
   console.log(`\nИТОГО: ${pass} прошло, ${fail} упало`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error('ERROR:', e.message); process.exit(2); });

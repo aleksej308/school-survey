@@ -42,8 +42,9 @@ async function render(hash, authed) {
     sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
     fetch: async (url) => {
       const u = String(url);
-      if (u.includes('/api/bootstrap')) return jsonRes({ surveys: [], classes: [{ id: 1, name: '9А' }] });
-      if (u.includes('/api/admin/me')) return jsonRes({ authed });
+      if (u.includes('/api/bootstrap')) return jsonRes({ surveys: [], classes: [{ id: 1, name: '9А' }], school_name: 'Школа № 197' });
+      if (u.includes('/api/admin/me')) return jsonRes({ authed, role: authed ? 'admin' : null });
+      if (u.includes('/api/admin/settings')) return jsonRes({ school_name: 'Школа № 197', editor_enabled: false });
       if (u.includes('/api/admin/surveys')) return jsonRes({ surveys: [] });
       if (u.includes('/api/admin/classes')) return jsonRes({ classes: [] });
       return jsonRes({});
