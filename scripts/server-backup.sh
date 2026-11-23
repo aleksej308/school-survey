@@ -50,4 +50,26 @@ for name in "${INSTANCES[@]}"; do
   echo "OK: $name -> $OUT_DIR/$name-$STAMP.tar.gz ($(du -h "$OUT_DIR/$name-$STAMP.tar.gz" | cut -f1))"
 done
 
-find "$OUT_DIR" -name "*-20*.tar.gz" -mtime +"$KEEP_DAYS" -delete
+# ---------- bp-editor: bind-папка с данными (SQLite и файлы) ----------
+if [ -d /opt/bp-editor-repo/docker-data ]; then
+  tar czf "$OUT_DIR/bp-editor-$STAMP.tar.gz" -C /opt/bp-editor-repo docker-data
+  ln -sf "bp-editor-$STAMP.tar.gz" "$OUT_DIR/bp-editor-latest.tar.gz"
+  echo "OK: bp-editor -> $OUT_DIR/bp-editor-$STAMP.tar.gz ($(du -h "$OUT_DIR/bp-editor-$STAMP.tar.gz" | cut -f1))"
+fi
+
+# ---------- demo-equipment: PostgreSQL dump + uploads ----------
+if [ "$(docker ps -q -f name=^/demo-equipment-db-1$)" != "" ]; then
+  docker exec demo-equipment-db-1 pg_dump -U demo -d demo | gzip > "$OUT_DIR/demo-equipment-db-$STAMP.sql.gz"
+  ln -sf "demo-equipment-db-$STAMP.sql.gz" "$OUT_DIR/demo-equipment-db-latest.sql.gz"
+  echo "OK: demo-equipment-db -> $OUT_DIR/demo-equipment-db-$STAMP.sql.gz ($(du -h "$OUT_DIR/demo-equipment-db-$STAMP.sql.gz" | cut -f1))"
+fi
+if docker volume inspect demo-equipment_uploads >/dev/null 2>&1; then
+  # postgres:16-alpine уже есть на сервере — используем его как одноразовый tar
+  docker run --rm -v demo-equipment_uploads:/src:ro -v "$OUT_DIR":/backup postgres:16-alpine \
+    tar czf "/backup/demo-equipment-uploads-$STAMP.tar.gz" -C /src .
+  ln -sf "demo-equipment-uploads-$STAMP.tar.gz" "$OUT_DIR/demo-equipment-uploads-latest.tar.gz"
+  echo "OK: demo-equipment-uploads -> $OUT_DIR/demo-equipment-uploads-$STAMP.tar.gz ($(du -h "$OUT_DIR/demo-equipment-uploads-$STAMP.tar.gz" | cut -f1))"
+fi
+
+# ---------- чистка: оставляем последние KEEP_DAYS ----------
+find "$OUT_DIR" \( -name "*-20*.tar.gz" -o -name "*-20*.sql.gz" \) -mtime +"$KEEP_DAYS" -delete
