@@ -162,7 +162,7 @@ def main():
         send_telegram(conf, f"🟢 Сервер: работа восстановлена\nВремя: {stamp}\n\n{lines}")
         for k in to_recover:
             state.get("failing", {}).pop(k, None)
-        print(stamp, "RECOVER:", "; ".join(lines))
+        print(stamp, "RECOVER:", ", ".join(sorted(to_recover)))
     if not to_alert and not to_recover:
         quiet = "нет проблем" if not failing else f"проблемы продолжаются: {len(failing)}"
         print(stamp, "OK:", quiet)
