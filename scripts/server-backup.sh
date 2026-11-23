@@ -33,15 +33,16 @@ for name in "${INSTANCES[@]}"; do
     const db = new DatabaseSync('/app/data/app.db');
     db.exec(\"VACUUM INTO '/tmp/backup-snap.db'\");
     db.close();
-  " >/dev/null
+  " >/dev/null 2>&1
 
-  # Снапшот БД + папка uploads (загруженные логотип/фото) — одним архивом.
+  # Снапшот БД + папка uploads одним архивом. busybox tar не умеет два -C,
+  # поэтому временный файл кладём рядом с uploads и убираем после упаковки.
   docker exec "$name" sh -c '
     mkdir -p /app/data/uploads
-    tar czf - -C /tmp backup-snap.db -C /app/data uploads
+    cp /tmp/backup-snap.db /app/data/backup-snap.db
+    tar czf - -C /app/data backup-snap.db uploads
+    rm -f /app/data/backup-snap.db /tmp/backup-snap.db
   ' > "$OUT_DIR/$name-$STAMP.tar.gz"
-
-  docker exec "$name" rm -f /tmp/backup-snap.db
 
   ln -sf "$name-$STAMP.tar.gz" "$OUT_DIR/$name-latest.tar.gz"
   echo "OK: $name -> $OUT_DIR/$name-$STAMP.tar.gz ($(du -h "$OUT_DIR/$name-$STAMP.tar.gz" | cut -f1))"
