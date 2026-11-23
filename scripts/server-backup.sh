@@ -75,21 +75,26 @@ fi
 find "$OUT_DIR" \( -name "*-20*.tar.gz" -o -name "*-20*.sql.gz" \) -mtime +"$KEEP_DAYS" -delete
 
 # ---------- Яндекс.Диск (WebDAV): копия в облако, там храним CLOUD_KEEP_DAYS ----------
-# Реквизиты: /etc/yadisk-credentials (chmod 600), две строки:
+# Реквизиты: /etc/yadisk-credentials (chmod 600):
 #   YADISK_USER=логин
 #   YADISK_PASS=пароль_приложения
+#   YADISK_DIR=AI проекты/Backups   (папка на Диске, кириллица допустима)
 # Нет файла — загрузка пропускается, локальные копии продолжают создаваться.
 CLOUD_KEEP_DAYS="${CLOUD_KEEP_DAYS:-30}"
-CLOUD_DIR="backups/school-survey"
 if [ -f /etc/yadisk-credentials ]; then
   # shellcheck disable=SC1091
   . /etc/yadisk-credentials
   WEBDAV="https://webdav.yandex.ru"
   AUTH="$YADISK_USER:$YADISK_PASS"
+  # URL-кодируем путь (кириллица/пробелы) по компонентам, сохраняя слэши
+  CLOUD_DIR_ENC=$(python3 -c "
+import urllib.parse, sys
+print('/'.join(urllib.parse.quote(p) for p in sys.argv[1].split('/')))
+" "${YADISK_DIR:-backups/school-survey}")
 
-  upload() { curl -sf -u "$AUTH" -T "$1" "$WEBDAV/$CLOUD_DIR/$2"; }
-  # папка создаётся при первом MKCOL, дальше игнорируем «уже существует»
-  curl -s -u "$AUTH" -X MKCOL "$WEBDAV/$CLOUD_DIR" >/dev/null
+  upload() { curl -sf -u "$AUTH" -T "$1" "$WEBDAV/$CLOUD_DIR_ENC/$2"; }
+  # папка уже должна существовать; MKCOL игнорируем (405 «уже есть» — норм)
+  curl -s -u "$AUTH" -X MKCOL "$WEBDAV/$CLOUD_DIR_ENC" >/dev/null 2>&1
 
   for f in "$OUT_DIR"/*-latest.tar.gz "$OUT_DIR"/*-latest.sql.gz; do
     [ -e "$f" ] || continue
@@ -103,12 +108,12 @@ if [ -f /etc/yadisk-credentials ]; then
 
   # Чистка облака: дата зашита в имени файла (-YYYY-MM-DD.), удаляем старше N дней
   cutoff=$(date -d "$CLOUD_KEEP_DAYS days ago" +%Y-%m-%d)
-  cloud_list=$(curl -sf -u "$AUTH" -X PROPFIND -H "Depth: 1" "$WEBDAV/$CLOUD_DIR" \
+  cloud_list=$(curl -sf -u "$AUTH" -X PROPFIND -H "Depth: 1" "$WEBDAV/$CLOUD_DIR_ENC" \
     | grep -oE '[a-zA-Z0-9._-]+-20[0-9]{2}-[0-9]{2}-[0-9]{2}\.(tar\.gz|sql\.gz)' | sort -u)
   for name in $cloud_list; do
     fdate=$(echo "$name" | grep -oE '20[0-9]{2}-[0-9]{2}-[0-9]{2}')
     if [ "$fdate" \< "$cutoff" ]; then
-      curl -sf -u "$AUTH" -X DELETE "$WEBDAV/$CLOUD_DIR/$name" \
+      curl -sf -u "$AUTH" -X DELETE "$WEBDAV/$CLOUD_DIR_ENC/$name" \
         && echo "CLOUD: удалена старая копия $name"
     fi
   done
