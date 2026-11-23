@@ -27,7 +27,9 @@ for name in "${INSTANCES[@]}"; do
   fi
 
   # Согласованный снапшот БД: VACUUM INTO пишет консистентную копию,
-  # не прерывая работу приложения.
+  # не прерывая работу приложения. Файл-остаток от прошлого прогона
+  # обязательно убираем — VACUUM INTO не перезаписывает существующее.
+  docker exec "$name" rm -f /tmp/backup-snap.db /app/data/backup-snap.db
   docker exec "$name" node -e "
     const { DatabaseSync } = require('node:sqlite');
     const db = new DatabaseSync('/app/data/app.db');
