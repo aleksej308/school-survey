@@ -75,10 +75,10 @@ fi
 find "$OUT_DIR" \( -name "*-20*.tar.gz" -o -name "*-20*.sql.gz" \) -mtime +"$KEEP_DAYS" -delete
 
 # ---------- Яндекс.Диск (WebDAV): копия в облако, там храним CLOUD_KEEP_DAYS ----------
-# Реквизиты: /etc/yadisk-credentials (chmod 600):
-#   YADISK_USER=логин
+# Реквизиты: /etc/yadisk-credentials (chmod 600). Значения с пробелами — в кавычках:
+#   YADISK_USER=aleksej308
 #   YADISK_PASS=пароль_приложения
-#   YADISK_DIR=AI проекты/Backups   (папка на Диске, кириллица допустима)
+#   YADISK_DIR="AI проекты/Backups"   (папка на Диске, кириллица допустима)
 # Нет файла — загрузка пропускается, локальные копии продолжают создаваться.
 CLOUD_KEEP_DAYS="${CLOUD_KEEP_DAYS:-30}"
 if [ -f /etc/yadisk-credentials ]; then
