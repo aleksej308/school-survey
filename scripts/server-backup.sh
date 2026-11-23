@@ -73,3 +73,45 @@ fi
 
 # ---------- чистка: оставляем последние KEEP_DAYS ----------
 find "$OUT_DIR" \( -name "*-20*.tar.gz" -o -name "*-20*.sql.gz" \) -mtime +"$KEEP_DAYS" -delete
+
+# ---------- Яндекс.Диск (WebDAV): копия в облако, там храним CLOUD_KEEP_DAYS ----------
+# Реквизиты: /etc/yadisk-credentials (chmod 600), две строки:
+#   YADISK_USER=логин
+#   YADISK_PASS=пароль_приложения
+# Нет файла — загрузка пропускается, локальные копии продолжают создаваться.
+CLOUD_KEEP_DAYS="${CLOUD_KEEP_DAYS:-30}"
+CLOUD_DIR="backups/school-survey"
+if [ -f /etc/yadisk-credentials ]; then
+  # shellcheck disable=SC1091
+  . /etc/yadisk-credentials
+  WEBDAV="https://webdav.yandex.ru"
+  AUTH="$YADISK_USER:$YADISK_PASS"
+
+  upload() { curl -sf -u "$AUTH" -T "$1" "$WEBDAV/$CLOUD_DIR/$2"; }
+  # папка создаётся при первом MKCOL, дальше игнорируем «уже существует»
+  curl -s -u "$AUTH" -X MKCOL "$WEBDAV/$CLOUD_DIR" >/dev/null
+
+  for f in "$OUT_DIR"/*-latest.tar.gz "$OUT_DIR"/*-latest.sql.gz; do
+    [ -e "$f" ] || continue
+    name="$(basename "$f" | sed 's/-latest\./'"-$STAMP."'/')"
+    if upload "$f" "$name"; then
+      echo "CLOUD: $name загружен на Яндекс.Диск"
+    else
+      echo "CLOUD: не удалось загрузить $name (проверьте /etc/yadisk-credentials)" >&2
+    fi
+  done
+
+  # Чистка облака: дата зашита в имени файла (-YYYY-MM-DD.), удаляем старше N дней
+  cutoff=$(date -d "$CLOUD_KEEP_DAYS days ago" +%Y-%m-%d)
+  cloud_list=$(curl -sf -u "$AUTH" -X PROPFIND -H "Depth: 1" "$WEBDAV/$CLOUD_DIR" \
+    | grep -oE '[a-zA-Z0-9._-]+-20[0-9]{2}-[0-9]{2}-[0-9]{2}\.(tar\.gz|sql\.gz)' | sort -u)
+  for name in $cloud_list; do
+    fdate=$(echo "$name" | grep -oE '20[0-9]{2}-[0-9]{2}-[0-9]{2}')
+    if [ "$fdate" \< "$cutoff" ]; then
+      curl -sf -u "$AUTH" -X DELETE "$WEBDAV/$CLOUD_DIR/$name" \
+        && echo "CLOUD: удалена старая копия $name"
+    fi
+  done
+else
+  echo "CLOUD: пропущено — нет /etc/yadisk-credentials"
+fi
